@@ -59,3 +59,8 @@ NEWS_COUNT = 5
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "")        # your Gmail address
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")     # Gmail App Password (16 chars)
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER", "")     # client's email to receive alerts
+
+# Twilio SMS Settings
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")  # e.g. +1234567890
