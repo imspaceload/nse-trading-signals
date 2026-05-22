@@ -207,79 +207,84 @@ def compute_for_symbol(yf_sym, nse_sym, period, interval):
 
 # Fetch data
 with st.spinner(f"Loading {selected_symbol} data..."):
-    inst_data = compute_for_symbol(sym["yf"], sym["nse"], chart_period, chart_interval)
-    news = fetch_news()
+    try:
+        inst_data = compute_for_symbol(sym["yf"], sym["nse"], chart_period, chart_interval)
+    except Exception:
+        inst_data = None
+    try:
+        news = fetch_news()
+    except Exception:
+        news = []
 
-if not inst_data:
-    st.error(f"Could not fetch data for {selected_symbol}. Will retry on next refresh.")
-    st.stop()
-
-spot_price = inst_data["spot"]
-df = inst_data["df"]
-signal = inst_data["signal"]
-option_rec = inst_data["option_rec"]
-all_signals = inst_data["all_signals"]
-rsi = inst_data["rsi"]
-macd_data = inst_data["macd"]
-supertrend = inst_data["supertrend"]
-vwap_data = inst_data["vwap"]
-oi_data = inst_data["oi"]
-action = signal["action"]
-
-
-# ══════════════════════════════════════════
-#  AUTO SIGNAL → AUTO TRADE → AUTO SMS
-#  This is the brain: no manual work needed
-# ══════════════════════════════════════════
-
-alert_key = f"last_auto_signal_{selected_symbol}"
-last_auto = st.session_state.get(alert_key, None)
+data_ok = inst_data is not None
 sms_sent_this_run = False
+sms_sent_count = 0
+sms_fail_count = 0
 
-if action in ("BUY", "SELL") and action != last_auto:
-    st.session_state[alert_key] = action
+if data_ok:
+    spot_price = inst_data["spot"]
+    df = inst_data["df"]
+    signal = inst_data["signal"]
+    option_rec = inst_data["option_rec"]
+    all_signals = inst_data["all_signals"]
+    rsi = inst_data["rsi"]
+    macd_data = inst_data["macd"]
+    supertrend = inst_data["supertrend"]
+    vwap_data = inst_data["vwap"]
+    oi_data = inst_data["oi"]
+    action = signal["action"]
 
-    # ── 1. Auto-create trade from signal ──
-    opt_type = "CE" if action == "BUY" else "PE"
-    if option_rec:
-        auto_trade = create_trade(
-            instrument=selected_symbol,
-            strike=option_rec["strike"],
-            option_type=opt_type,
-            expiry=option_rec["expiry"],
-            entry_price=option_rec["ltp"],
-            target_price=option_rec["premium_target"],
-            stop_loss=option_rec["premium_sl"],
-            quantity=1,
-            lot_size=option_rec["lot_size"],
-        )
-    else:
-        # No option chain available — use spot price details
-        auto_trade = create_trade(
-            instrument=selected_symbol,
-            strike=round(spot_price / 100) * 100,  # nearest 100
-            option_type=opt_type,
-            expiry="Weekly",
-            entry_price=spot_price,
-            target_price=signal["target"] if signal["target"] else round(spot_price * 1.01, 2),
-            stop_loss=signal["stop_loss"] if signal["stop_loss"] else round(spot_price * 0.997, 2),
-            quantity=1,
-            lot_size=1,
-        )
+    # ══════════════════════════════════════════
+    #  AUTO SIGNAL → AUTO TRADE → AUTO SMS
+    #  This is the brain: no manual work needed
+    # ══════════════════════════════════════════
 
-    # ── 2. Auto-send SMS to ALL subscribers ──
-    sms_results = send_sms_to_all(auto_trade, action="BUY")
-    sms_sent_count = sum(1 for r in sms_results if r.get("status") != "failed") if sms_results else 0
-    sms_fail_count = sum(1 for r in sms_results if r.get("status") == "failed") if sms_results else 0
-    sms_sent_this_run = True
+    alert_key = f"last_auto_signal_{selected_symbol}"
+    last_auto = st.session_state.get(alert_key, None)
 
-    # ── 3. Auto-send email ──
-    if email_on and sender and app_pwd and receiver:
-        send_signal_email(sender, app_pwd, receiver, selected_symbol, signal, option_rec)
+    if action in ("BUY", "SELL") and action != last_auto:
+        st.session_state[alert_key] = action
 
-    # ── 4. Browser sound alert ──
-    alert_msg = f"{action} {selected_symbol} @₹{spot_price:,.0f}"
-    components.html(f"""
+        # ── 1. Auto-create trade from signal ──
+        opt_type = "CE" if action == "BUY" else "PE"
+        if option_rec:
+            auto_trade = create_trade(
+                instrument=selected_symbol,
+                strike=option_rec["strike"],
+                option_type=opt_type,
+                expiry=option_rec["expiry"],
+                entry_price=option_rec["ltp"],
+                target_price=option_rec["premium_target"],
+                stop_loss=option_rec["premium_sl"],
+                quantity=1,
+                lot_size=option_rec["lot_size"],
+            )
+        else:
+            auto_trade = create_trade(
+                instrument=selected_symbol,
+                strike=round(spot_price / 100) * 100,
+                option_type=opt_type,
+                expiry="Weekly",
+                entry_price=spot_price,
+                target_price=signal["target"] if signal["target"] else round(spot_price * 1.01, 2),
+                stop_loss=signal["stop_loss"] if signal["stop_loss"] else round(spot_price * 0.997, 2),
+                quantity=1,
+                lot_size=1,
+            )
+
+        # ── 2. Auto-send SMS to ALL subscribers ──
+        sms_results = send_sms_to_all(auto_trade, action="BUY")
+        sms_sent_count = sum(1 for r in sms_results if r.get("status") != "failed") if sms_results else 0
+        sms_fail_count = sum(1 for r in sms_results if r.get("status") == "failed") if sms_results else 0
+        sms_sent_this_run = True
+
+        # ── 3. Auto-send email ──
+        if email_on and sender and app_pwd and receiver:
+            send_signal_email(sender, app_pwd, receiver, selected_symbol, signal, option_rec)
+
+        # ── 4. Browser sound alert ──
+        alert_msg = f"{action} {selected_symbol} @₹{spot_price:,.0f}"
+        components.html(f"""
 <script>
 var ctx = new (window.AudioContext || window.webkitAudioContext)();
 function beep(f,d){{var o=ctx.createOscillator();o.type='sine';o.frequency.value=f;o.connect(ctx.destination);o.start();setTimeout(function(){{o.stop();}},d);}}
@@ -291,46 +296,44 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
 </script>
 """, height=0)
 
-elif action == "HOLD":
-    st.session_state[alert_key] = "HOLD"
+    elif action == "HOLD":
+        st.session_state[alert_key] = "HOLD"
 
+    # ══════════════════════════════════════════
+    #  AUTO-CLOSE: check open trades for SL / Target hit
+    # ══════════════════════════════════════════
 
-# ══════════════════════════════════════════
-#  AUTO-CLOSE: check open trades for SL / Target hit
-# ══════════════════════════════════════════
+    open_trades_check = get_open_trades()
+    for t in open_trades_check:
+        if t["stop_loss"] > 0 and spot_price <= t["stop_loss"]:
+            closed = close_trade(t["id"], t["stop_loss"])
+            if closed:
+                send_sms_to_all(closed, action="EXIT")
+        elif t["target_price"] > 0 and spot_price >= t["target_price"]:
+            closed = close_trade(t["id"], t["target_price"])
+            if closed:
+                send_sms_to_all(closed, action="EXIT")
 
-open_trades = get_open_trades()
-for t in open_trades:
-    # Check if current price hit SL or Target
-    if t["stop_loss"] > 0 and spot_price <= t["stop_loss"]:
-        closed = close_trade(t["id"], t["stop_loss"])
-        if closed:
-            send_sms_to_all(closed, action="EXIT")
-    elif t["target_price"] > 0 and spot_price >= t["target_price"]:
-        closed = close_trade(t["id"], t["target_price"])
-        if closed:
-            send_sms_to_all(closed, action="EXIT")
+    # ── HEADER ──
+    day_change = df["Close"].iloc[-1] - df["Open"].iloc[0]
+    day_pct = (day_change / df["Open"].iloc[0]) * 100
+    color = "#22c55e" if day_change >= 0 else "#ef4444"
+    arrow = "▲" if day_change >= 0 else "▼"
 
+    st.markdown(f"## {selected_symbol} — ₹{spot_price:,.2f}")
+    st.markdown(f'<span style="color:{color};font-size:1.1em;font-weight:600;">{arrow} ₹{abs(day_change):,.2f} ({day_pct:+.2f}%)</span> &nbsp; <span style="color:#6b7280;">H: ₹{df["High"].max():,.2f} &nbsp; L: ₹{df["Low"].min():,.2f}</span>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════
-#  HEADER
-# ══════════════════════════════════════════
+    if sms_sent_this_run:
+        st.success(f"🚀 AUTO SIGNAL FIRED: {action} {selected_symbol} — SMS sent to {sms_sent_count} subscriber(s)" + (f", {sms_fail_count} failed" if sms_fail_count else ""))
+    elif action in ("BUY", "SELL"):
+        st.info(f"📱 Last signal: {action} — already sent (waiting for new signal)")
+    else:
+        st.markdown(f'<div class="auto-sms-banner"><div class="title">🤖 Auto-pilot active — scanning every 60s</div><div class="info">When BUY/SELL signal fires → auto picks option → auto sends SMS to {len(subs)} subscriber(s)</div></div>', unsafe_allow_html=True)
 
-day_change = df["Close"].iloc[-1] - df["Open"].iloc[0]
-day_pct = (day_change / df["Open"].iloc[0]) * 100
-color = "#22c55e" if day_change >= 0 else "#ef4444"
-arrow = "▲" if day_change >= 0 else "▼"
-
-st.markdown(f"## {selected_symbol} — ₹{spot_price:,.2f}")
-st.markdown(f'<span style="color:{color};font-size:1.1em;font-weight:600;">{arrow} ₹{abs(day_change):,.2f} ({day_pct:+.2f}%)</span> &nbsp; <span style="color:#6b7280;">H: ₹{df["High"].max():,.2f} &nbsp; L: ₹{df["Low"].min():,.2f}</span>', unsafe_allow_html=True)
-
-# Show auto-SMS status banner
-if sms_sent_this_run:
-    st.success(f"🚀 AUTO SIGNAL FIRED: {action} {selected_symbol} — SMS sent to {sms_sent_count} subscriber(s)" + (f", {sms_fail_count} failed" if sms_fail_count else ""))
-elif action in ("BUY", "SELL"):
-    st.info(f"📱 Last signal: {action} — already sent (waiting for new signal)")
 else:
-    st.markdown(f'<div class="auto-sms-banner"><div class="title">🤖 Auto-pilot active — scanning every 60s</div><div class="info">When BUY/SELL signal fires → auto picks option → auto sends SMS to {len(subs)} subscriber(s)</div></div>', unsafe_allow_html=True)
+    # Data fetch failed — show warning but DON'T stop the app
+    st.warning(f"⚠️ Could not fetch market data for {selected_symbol}. Will retry on next auto-refresh (60s). Trades & SMS Admin still work below.")
+    action = "HOLD"
 
 
 # ══════════════════════════════════════════
@@ -344,77 +347,80 @@ tab_signals, tab_trades, tab_news, tab_sms = st.tabs([
 
 # ── TAB 1: SIGNALS & CHART ──
 with tab_signals:
-    action_col, chat_col = st.columns([3, 2])
+    if not data_ok:
+        st.error(f"⚠️ Market data unavailable for {selected_symbol}. Auto-retrying every 60s. Check Trades & SMS Admin tabs — they still work.")
+    else:
+        action_col, chat_col = st.columns([3, 2])
 
-    with action_col:
-        if action == "BUY":
-            panel_css = "action-buy"
-            icon_str = "🟢 BUY"
-            if option_rec:
-                steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
-                steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
-                steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+        with action_col:
+            if action == "BUY":
+                panel_css = "action-buy"
+                icon_str = "🟢 BUY"
+                if option_rec:
+                    steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
+                    steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                else:
+                    steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>CE (Call)</b> ATM strike near ₹{spot_price:,.0f}</div>'
+                    steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+            elif action == "SELL":
+                panel_css = "action-sell"
+                icon_str = "🔴 SELL"
+                if option_rec:
+                    steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
+                    steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                else:
+                    steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>PE (Put)</b> ATM strike near ₹{spot_price:,.0f}</div>'
+                    steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
             else:
-                steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>CE (Call)</b> ATM strike near ₹{spot_price:,.0f}</div>'
-                steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
-        elif action == "SELL":
-            panel_css = "action-sell"
-            icon_str = "🔴 SELL"
+                panel_css = "action-hold"
+                icon_str = "🟡 HOLD"
+                steps_html = '<div class="step">⏸️ No clear signal. <b>Waiting for next one...</b></div>'
+                steps_html += f'<div class="step">💡 {signal["buy_count"]} BUY / {signal["sell_count"]} SELL indicators — need 3+ to align</div>'
+                steps_html += '<div class="step">🤖 App is scanning every 60s. SMS fires automatically.</div>'
+
+            alert_class = ' alert-banner' if action in ("BUY", "SELL") else ''
+            panel_html = f'<div class="action-panel {panel_css}{alert_class}"><h2>{icon_str} {selected_symbol}</h2>{steps_html}</div>'
+            st.markdown(panel_html, unsafe_allow_html=True)
+
             if option_rec:
-                steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
-                steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
-                steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
-            else:
-                steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>PE (Put)</b> ATM strike near ₹{spot_price:,.0f}</div>'
-                steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
-                steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
-        else:
-            panel_css = "action-hold"
-            icon_str = "🟡 HOLD"
-            steps_html = '<div class="step">⏸️ No clear signal. <b>Waiting for next one...</b></div>'
-            steps_html += f'<div class="step">💡 {signal["buy_count"]} BUY / {signal["sell_count"]} SELL indicators — need 3+ to align</div>'
-            steps_html += '<div class="step">🤖 App is scanning every 60s. SMS fires automatically.</div>'
+                opt_html = f'<div class="option-card"><h3>📋 Option Contract (Auto-Selected)</h3>'
+                opt_html += f'<div class="contract">{option_rec["contract"]}</div>'
+                opt_html += f'<div class="detail">Expiry: <b>{option_rec["expiry"]}</b></div>'
+                opt_html += f'<div class="detail">Premium: <b>₹{option_rec["ltp"]:,.2f}</b> | Bid: ₹{option_rec["bid"]:,.2f} Ask: ₹{option_rec["ask"]:,.2f}</div>'
+                opt_html += f'<div class="detail">Lot: <b>{option_rec["lot_size"]}</b> | Total: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
+                opt_html += f'<div class="detail">OI: {option_rec["oi"]:,} | OI Δ: {option_rec["oi_change"]:,} | IV: {option_rec["iv"]}%</div>'
+                opt_html += f'<div class="detail" style="margin-top:8px;font-weight:700;">🛑 SL: ₹{option_rec["premium_sl"]:,.2f} | 🎯 Target: ₹{option_rec["premium_target"]:,.2f}</div>'
+                opt_html += '</div>'
+                st.markdown(opt_html, unsafe_allow_html=True)
 
-        alert_class = ' alert-banner' if action in ("BUY", "SELL") else ''
-        panel_html = f'<div class="action-panel {panel_css}{alert_class}"><h2>{icon_str} {selected_symbol}</h2>{steps_html}</div>'
-        st.markdown(panel_html, unsafe_allow_html=True)
+        with chat_col:
+            st.markdown(f"### 💬 {selected_symbol} Signal Feed")
+            chat_html = '<div class="chat-container">'
+            now_str = datetime.now(IST).strftime("%I:%M %p")
+            chat_css = f"chat-{action.lower()}"
+            chat_text = format_signal_chat(signal, selected_symbol, "")
+            chat_html += f'<div class="chat-msg {chat_css}">{chat_text}<div class="chat-time">{now_str} ✓✓</div></div>'
 
-        if option_rec:
-            opt_html = f'<div class="option-card"><h3>📋 Option Contract (Auto-Selected)</h3>'
-            opt_html += f'<div class="contract">{option_rec["contract"]}</div>'
-            opt_html += f'<div class="detail">Expiry: <b>{option_rec["expiry"]}</b></div>'
-            opt_html += f'<div class="detail">Premium: <b>₹{option_rec["ltp"]:,.2f}</b> | Bid: ₹{option_rec["bid"]:,.2f} Ask: ₹{option_rec["ask"]:,.2f}</div>'
-            opt_html += f'<div class="detail">Lot: <b>{option_rec["lot_size"]}</b> | Total: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
-            opt_html += f'<div class="detail">OI: {option_rec["oi"]:,} | OI Δ: {option_rec["oi_change"]:,} | IV: {option_rec["iv"]}%</div>'
-            opt_html += f'<div class="detail" style="margin-top:8px;font-weight:700;">🛑 SL: ₹{option_rec["premium_sl"]:,.2f} | 🎯 Target: ₹{option_rec["premium_target"]:,.2f}</div>'
-            opt_html += '</div>'
-            st.markdown(opt_html, unsafe_allow_html=True)
+            for s in reversed(all_signals[-5:]):
+                ts = s["index"].strftime("%I:%M %p, %d %b") if hasattr(s["index"], "strftime") else str(s["index"])
+                s_css = "chat-buy" if s["action"] == "BUY" else "chat-sell"
+                opt_type = "CE" if s["action"] == "BUY" else "PE"
+                s_icon = "🟢" if s["action"] == "BUY" else "🔴"
+                chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol}</b><br>📍 ₹{s["price"]:,.2f} → Buy {opt_type}<br>🛑 SL: ₹{s["sl"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
+            chat_html += '</div>'
+            st.markdown(chat_html, unsafe_allow_html=True)
 
-    with chat_col:
-        st.markdown(f"### 💬 {selected_symbol} Signal Feed")
-        chat_html = '<div class="chat-container">'
-        now_str = datetime.now(IST).strftime("%I:%M %p")
-        chat_css = f"chat-{action.lower()}"
-        chat_text = format_signal_chat(signal, selected_symbol, "")
-        chat_html += f'<div class="chat-msg {chat_css}">{chat_text}<div class="chat-time">{now_str} ✓✓</div></div>'
+        st.markdown("---")
 
-        for s in reversed(all_signals[-5:]):
-            ts = s["index"].strftime("%I:%M %p, %d %b") if hasattr(s["index"], "strftime") else str(s["index"])
-            s_css = "chat-buy" if s["action"] == "BUY" else "chat-sell"
-            opt_type = "CE" if s["action"] == "BUY" else "PE"
-            s_icon = "🟢" if s["action"] == "BUY" else "🔴"
-            chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol}</b><br>📍 ₹{s["price"]:,.2f} → Buy {opt_type}<br>🛑 SL: ₹{s["sl"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
-        chat_html += '</div>'
-        st.markdown(chat_html, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ── Chart ──
+    # ── Chart (only if data available) ──
     def build_chart_html(chart_id, chart_df, v_data, st_data, r_data, m_data, sig_list):
         IST_OFFSET = 19800
 
@@ -489,38 +495,39 @@ else{{[mc,vc,rc,dc].forEach(function(c){{c.timeScale().fitContent();}});}}
 window.addEventListener('resize',function(){{var w=document.getElementById('{mc}').clientWidth;[mc,vc,rc,dc].forEach(function(c){{c.applyOptions({{width:w}})}});}});
 </script></body></html>"""
 
-    components.html(build_chart_html(0, df, vwap_data, supertrend, rsi, macd_data, all_signals), height=680, scrolling=False)
+    if data_ok:
+        components.html(build_chart_html(0, df, vwap_data, supertrend, rsi, macd_data, all_signals), height=680, scrolling=False)
 
-    # ── Indicator Cards ──
-    def badge(sig):
-        c = {"BUY": "buy", "SELL": "sell", "NEUTRAL": "neutral"}.get(sig, "neutral")
-        return f'<span class="badge badge-{c}">{sig}</span>'
+        # ── Indicator Cards ──
+        def badge(sig):
+            c = {"BUY": "buy", "SELL": "sell", "NEUTRAL": "neutral"}.get(sig, "neutral")
+            return f'<span class="badge badge-{c}">{sig}</span>'
 
-    ic1, ic2, ic3, ic4, ic5 = st.columns(5)
-    with ic1:
-        rl = "Oversold" if rsi["value"] < 30 else "Overbought" if rsi["value"] > 70 else "Neutral"
-        st.markdown(f'<div class="indicator-card"><h4>RSI ({RSI_PERIOD})</h4><div class="value">{rsi["value"]}</div>{badge(rsi["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">{rl}</div></div>', unsafe_allow_html=True)
-    with ic2:
-        st.markdown(f'<div class="indicator-card"><h4>MACD</h4><div class="value">{macd_data["histogram"]}</div>{badge(macd_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">L:{macd_data["macd_line"]} S:{macd_data["signal_line"]}</div></div>', unsafe_allow_html=True)
-    with ic3:
-        dl = "▲ Up" if supertrend["direction"] == 1 else "▼ Down"
-        st.markdown(f'<div class="indicator-card"><h4>SuperTrend</h4><div class="value">{dl}</div>{badge(supertrend["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">₹{supertrend["value"]:,.2f}</div></div>', unsafe_allow_html=True)
-    with ic4:
-        vd = vwap_data["current_price"] - vwap_data["value"]
-        st.markdown(f'<div class="indicator-card"><h4>VWAP</h4><div class="value">₹{vwap_data["value"]:,.2f}</div>{badge(vwap_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">{"Above" if vd > 0 else "Below"} by ₹{abs(vd):,.2f}</div></div>', unsafe_allow_html=True)
-    with ic5:
-        st.markdown(f'<div class="indicator-card"><h4>OI / PCR</h4><div class="value">{oi_data["pcr"]}</div>{badge(oi_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">Net Δ: {oi_data["net_oi_change"]:,}</div></div>', unsafe_allow_html=True)
+        ic1, ic2, ic3, ic4, ic5 = st.columns(5)
+        with ic1:
+            rl = "Oversold" if rsi["value"] < 30 else "Overbought" if rsi["value"] > 70 else "Neutral"
+            st.markdown(f'<div class="indicator-card"><h4>RSI ({RSI_PERIOD})</h4><div class="value">{rsi["value"]}</div>{badge(rsi["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">{rl}</div></div>', unsafe_allow_html=True)
+        with ic2:
+            st.markdown(f'<div class="indicator-card"><h4>MACD</h4><div class="value">{macd_data["histogram"]}</div>{badge(macd_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">L:{macd_data["macd_line"]} S:{macd_data["signal_line"]}</div></div>', unsafe_allow_html=True)
+        with ic3:
+            dl = "▲ Up" if supertrend["direction"] == 1 else "▼ Down"
+            st.markdown(f'<div class="indicator-card"><h4>SuperTrend</h4><div class="value">{dl}</div>{badge(supertrend["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">₹{supertrend["value"]:,.2f}</div></div>', unsafe_allow_html=True)
+        with ic4:
+            vd = vwap_data["current_price"] - vwap_data["value"]
+            st.markdown(f'<div class="indicator-card"><h4>VWAP</h4><div class="value">₹{vwap_data["value"]:,.2f}</div>{badge(vwap_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">{"Above" if vd > 0 else "Below"} by ₹{abs(vd):,.2f}</div></div>', unsafe_allow_html=True)
+        with ic5:
+            st.markdown(f'<div class="indicator-card"><h4>OI / PCR</h4><div class="value">{oi_data["pcr"]}</div>{badge(oi_data["signal"])}<div style="color:#9ca3af;font-size:0.7em;margin-top:4px;">Net Δ: {oi_data["net_oi_change"]:,}</div></div>', unsafe_allow_html=True)
 
-    # ── Signal History Table ──
-    if all_signals:
-        st.markdown(f"#### 📋 {selected_symbol} Signal History")
-        rows = ""
-        for s in reversed(all_signals[-8:]):
-            ts = s["index"].strftime("%d %b %H:%M") if hasattr(s["index"], "strftime") else str(s["index"])
-            ac = "#26a69a" if s["action"] == "BUY" else "#ef5350"
-            opt_label = "Buy CE" if s["action"] == "BUY" else "Buy PE"
-            rows += f'<tr><td>{ts}</td><td><span style="color:{ac};font-weight:700;">{"▲" if s["action"]=="BUY" else "▼"} {s["action"]}</span></td><td>{opt_label}</td><td>₹{s["price"]:,.2f}</td><td>₹{s["sl"]:,.2f}</td><td>₹{s["target"]:,.2f}</td></tr>'
-        st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Option</th><th>Entry</th><th>SL</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        # ── Signal History Table ──
+        if all_signals:
+            st.markdown(f"#### 📋 {selected_symbol} Signal History")
+            rows = ""
+            for s in reversed(all_signals[-8:]):
+                ts = s["index"].strftime("%d %b %H:%M") if hasattr(s["index"], "strftime") else str(s["index"])
+                ac = "#26a69a" if s["action"] == "BUY" else "#ef5350"
+                opt_label = "Buy CE" if s["action"] == "BUY" else "Buy PE"
+                rows += f'<tr><td>{ts}</td><td><span style="color:{ac};font-weight:700;">{"▲" if s["action"]=="BUY" else "▼"} {s["action"]}</span></td><td>{opt_label}</td><td>₹{s["price"]:,.2f}</td><td>₹{s["sl"]:,.2f}</td><td>₹{s["target"]:,.2f}</td></tr>'
+            st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Option</th><th>Entry</th><th>SL</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ── TAB 2: TRADE HISTORY (auto-created) ──
@@ -606,16 +613,22 @@ with tab_news:
 
     with ac_col:
         st.markdown("### 🤖 Claude Analysis")
-        prices_dict = {
-            "nifty": inst_data["spot"] if sym["nse"] == "NIFTY" else None,
-            "banknifty": inst_data["spot"] if sym["nse"] == "BANKNIFTY" else None,
-        }
-        with st.spinner("AI analyzing..."):
-            analysis = analyze_market(
-                prices_dict, signal, rsi, macd_data,
-                supertrend, vwap_data, oi_data, news,
-            )
-        st.markdown(f'<div class="analysis-box"><p style="color:#e5e7eb;line-height:1.7;font-size:0.95em;">{analysis}</p></div>', unsafe_allow_html=True)
+        if data_ok:
+            prices_dict = {
+                "nifty": inst_data["spot"] if sym["nse"] == "NIFTY" else None,
+                "banknifty": inst_data["spot"] if sym["nse"] == "BANKNIFTY" else None,
+            }
+            with st.spinner("AI analyzing..."):
+                try:
+                    analysis = analyze_market(
+                        prices_dict, signal, rsi, macd_data,
+                        supertrend, vwap_data, oi_data, news,
+                    )
+                except Exception:
+                    analysis = "Analysis unavailable — will retry on next refresh."
+            st.markdown(f'<div class="analysis-box"><p style="color:#e5e7eb;line-height:1.7;font-size:0.95em;">{analysis}</p></div>', unsafe_allow_html=True)
+        else:
+            st.info("Market data unavailable — AI analysis will appear when data loads.")
 
 
 # ── TAB 4: SMS ADMIN ──
@@ -679,14 +692,15 @@ with tab_sms:
 
         st.markdown("##### 🧪 Send Test SMS")
         if st.button("📤 Send Test to All Subscribers", use_container_width=True):
+            _test_price = spot_price if data_ok else 23000
             test_trade = {
                 "instrument": selected_symbol,
-                "strike": str(round(spot_price / 100) * 100),
+                "strike": str(round(_test_price / 100) * 100),
                 "option_type": "CE",
                 "expiry": "Test",
-                "entry_price": spot_price,
-                "target_price": round(spot_price * 1.01, 2),
-                "stop_loss": round(spot_price * 0.997, 2),
+                "entry_price": _test_price,
+                "target_price": round(_test_price * 1.01, 2),
+                "stop_loss": round(_test_price * 0.997, 2),
                 "quantity": 1,
             }
             results = send_sms_to_all(test_trade, action="BUY")
