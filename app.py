@@ -220,17 +220,27 @@ with st.sidebar:
 
 @st.cache_data(ttl=120)
 def fetch_data(yf_symbol, nse_symbol, period, interval):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        price_future = executor.submit(get_spot_price, yf_symbol)
-        df_future = executor.submit(get_intraday_data, yf_symbol, period, interval)
-        oi_future = executor.submit(get_option_chain_data, nse_symbol) if nse_symbol else None
+    spot, df, oi = None, pd.DataFrame(), None
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            price_future = executor.submit(get_spot_price, yf_symbol)
+            df_future = executor.submit(get_intraday_data, yf_symbol, period, interval)
+            oi_future = executor.submit(get_option_chain_data, nse_symbol) if nse_symbol else None
 
-        spot = price_future.result(timeout=30)
-        df = df_future.result(timeout=30)
-        try:
-            oi = oi_future.result(timeout=20) if oi_future else None
-        except Exception:
-            oi = None
+            try:
+                spot = price_future.result(timeout=45)
+            except Exception:
+                spot = None
+            try:
+                df = df_future.result(timeout=45)
+            except Exception:
+                df = pd.DataFrame()
+            try:
+                oi = oi_future.result(timeout=20) if oi_future else None
+            except Exception:
+                oi = None
+    except Exception:
+        pass
     return spot, df, oi
 
 @st.cache_data(ttl=300)

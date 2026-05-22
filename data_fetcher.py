@@ -1,5 +1,6 @@
 from typing import Optional
 import concurrent.futures
+import time
 
 import yfinance as yf
 import pandas as pd
@@ -28,32 +29,67 @@ def is_market_open() -> bool:
 
 
 def get_spot_price(symbol: str) -> Optional[float]:
+    """Fetch latest price with retry logic for cloud environments."""
+    for attempt in range(3):
+        try:
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period="1d", interval="1m")
+            if data.empty:
+                data = ticker.history(period="5d", interval="5m")
+            if not data.empty:
+                return round(float(data["Close"].iloc[-1]), 2)
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(1)
+            continue
+    # Final fallback: try fast_info
     try:
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d", interval="1m")
-        if data.empty:
-            data = ticker.history(period="5d", interval="5m")
-        if not data.empty:
-            return round(float(data["Close"].iloc[-1]), 2)
+        price = ticker.fast_info.get("lastPrice") or ticker.fast_info.get("regularMarketPrice")
+        if price:
+            return round(float(price), 2)
     except Exception:
         pass
     return None
 
 
 def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval)
-        if not df.empty:
-            return df
-    except Exception:
-        pass
+    """Fetch intraday OHLCV with retry logic."""
+    for attempt in range(3):
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval=interval)
+            if not df.empty:
+                return df
+        except Exception:
+            if attempt < 2:
+                time.sleep(1)
+            continue
+
+    # Fallback: try shorter period
+    for fallback_period in ["1d", "5d"]:
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=fallback_period, interval=interval)
+            if not df.empty:
+                return df
+        except Exception:
+            continue
+
     return pd.DataFrame()
 
 
 def _fetch_option_chain_inner(symbol_nse: str) -> Optional[dict]:
-    from nsepython import option_chain
-    data = option_chain(symbol_nse)
+    try:
+        from nsepython import option_chain
+    except ImportError:
+        return None
+
+    try:
+        data = option_chain(symbol_nse)
+    except Exception:
+        return None
+
     if data is not None and "records" in data:
         records = data["records"]
         total_ce_oi = 0
@@ -82,6 +118,8 @@ def _fetch_option_chain_inner(symbol_nse: str) -> Optional[dict]:
 
 
 def get_option_chain_data(symbol_nse: str) -> Optional[dict]:
+    if not symbol_nse:
+        return None
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(_fetch_option_chain_inner, symbol_nse)
@@ -91,10 +129,7 @@ def get_option_chain_data(symbol_nse: str) -> Optional[dict]:
 
 
 def get_option_recommendation(symbol_nse: str, spot_price: float, action: str) -> Optional[dict]:
-    """Given a signal (BUY/SELL), recommend the best option contract to trade.
-    BUY signal -> recommend ATM/slightly OTM CE (Call)
-    SELL signal -> recommend ATM/slightly OTM PE (Put)
-    """
+    """Given a signal (BUY/SELL), recommend the best option contract to trade."""
     try:
         from nsepython import option_chain
         data = option_chain(symbol_nse)
@@ -106,15 +141,12 @@ def get_option_recommendation(symbol_nse: str, spot_price: float, action: str) -
         nearest_expiry = expiry_dates[0] if expiry_dates else None
         all_strikes = records.get("strikePrices", [])
 
-        # Find ATM strike (nearest to spot)
         atm_strike = min(all_strikes, key=lambda s: abs(s - spot_price)) if all_strikes else None
         if atm_strike is None:
             return None
 
-        # For BUY signal -> buy CE; for SELL signal -> buy PE
         option_type = "CE" if action == "BUY" else "PE"
 
-        # Pick ATM and 1 OTM strike
         step = 50 if symbol_nse in ("NIFTY", "BANKNIFTY") else 100
         if option_type == "CE":
             strikes_to_check = [atm_strike, atm_strike + step]
@@ -152,17 +184,14 @@ def get_option_recommendation(symbol_nse: str, spot_price: float, action: str) -
                 "contract": f"{symbol_nse} {int(strike)} {option_type}",
             }
 
-            # Prefer ATM (first match)
             if best_option is None or strike == atm_strike:
                 best_option = entry
 
         if best_option:
-            # Add lot size
             lot_sizes = {"NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 40}
             lot = lot_sizes.get(symbol_nse, 1)
             best_option["lot_size"] = lot
             best_option["total_premium"] = round(best_option["ltp"] * lot, 2)
-            # SL and target on premium
             if action == "BUY":
                 best_option["premium_sl"] = round(best_option["ltp"] * 0.7, 2)
                 best_option["premium_target"] = round(best_option["ltp"] * 1.5, 2)
