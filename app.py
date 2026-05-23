@@ -14,7 +14,7 @@ from config import (
 )
 from data_fetcher import (
     get_spot_price, get_intraday_data, get_option_chain_data,
-    get_option_recommendation, is_market_open,
+    get_option_recommendation, is_market_open, get_current_option_ltp,
 )
 from indicators import (
     compute_rsi, compute_macd, compute_supertrend, compute_vwap,
@@ -305,12 +305,25 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
 
     open_trades_check = get_open_trades()
     for t in open_trades_check:
-        if t["stop_loss"] > 0 and spot_price <= t["stop_loss"]:
-            closed = close_trade(t["id"], t["stop_loss"])
+        # Look up the NSE symbol for this trade's instrument
+        t_sym_info = SYMBOLS.get(t["instrument"], {})
+        t_nse = t_sym_info.get("nse", "")
+        if not t_nse:
+            continue  # can't fetch option LTP without NSE symbol
+
+        # Fetch CURRENT option premium — this is what we compare SL/target against
+        current_ltp = get_current_option_ltp(
+            t_nse, t["strike"], t["option_type"], t["expiry"]
+        )
+        if current_ltp is None:
+            continue  # fetch failed — skip, don't false-trigger
+
+        if t["stop_loss"] > 0 and current_ltp <= t["stop_loss"]:
+            closed = close_trade(t["id"], current_ltp)
             if closed:
                 send_sms_to_all(closed, action="EXIT")
-        elif t["target_price"] > 0 and spot_price >= t["target_price"]:
-            closed = close_trade(t["id"], t["target_price"])
+        elif t["target_price"] > 0 and current_ltp >= t["target_price"]:
+            closed = close_trade(t["id"], current_ltp)
             if closed:
                 send_sms_to_all(closed, action="EXIT")
 

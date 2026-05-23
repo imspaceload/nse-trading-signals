@@ -204,6 +204,35 @@ def get_option_recommendation(symbol_nse: str, spot_price: float, action: str) -
         return None
 
 
+def get_current_option_ltp(symbol_nse: str, strike: float, option_type: str, expiry: str) -> Optional[float]:
+    """Fetch the current LTP of a specific option contract from NSE option chain.
+
+    Returns the last traded price as a float, or None if fetch fails.
+    """
+    if not symbol_nse:
+        return None
+    try:
+        from nsepython import option_chain
+        data = option_chain(symbol_nse)
+        if data is None or "records" not in data:
+            return None
+
+        for item in data["records"].get("data", []):
+            if item.get("strikePrice") != strike:
+                continue
+            if option_type not in item:
+                continue
+            opt = item[option_type]
+            if opt.get("expiryDate") != expiry:
+                continue
+            ltp = opt.get("lastPrice", 0)
+            if ltp > 0:
+                return round(float(ltp), 2)
+        return None
+    except Exception:
+        return None
+
+
 def get_prices(nifty_sym: str = "^NSEI", banknifty_sym: str = "^NSEBANK") -> dict:
     nifty = get_spot_price(nifty_sym)
     banknifty = get_spot_price(banknifty_sym)
