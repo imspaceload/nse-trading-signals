@@ -40,6 +40,9 @@ st.set_page_config(page_title="NSE Trading Signals", page_icon="📊", layout="w
 _refresh_ms = 60_000 if is_market_open() else 300_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
+# ── Honest UX disclaimer ──
+st.info("📢 Signals fire only while this browser tab is open. For 24/7 alerts, contact developer for upgrade.")
+
 # ── Custom CSS ──
 st.markdown("""
 <style>
