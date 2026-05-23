@@ -8,9 +8,20 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-FAST2SMS_API_KEY = os.environ.get("FAST2SMS_API_KEY", "")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+def _get_secret(key: str) -> str:
+    """Read secret from env var or Streamlit secrets."""
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, "")
+    except Exception:
+        return ""
+
+FAST2SMS_API_KEY = _get_secret("FAST2SMS_API_KEY")
+SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 
 # Lazy-initialized Supabase client
 _supabase_client = None
@@ -52,10 +63,12 @@ def get_subscribers() -> List[dict]:
     sb = _get_supabase()
     if sb:
         try:
-            resp = sb.table("subscribers").select("*").eq("active", True).execute()
-            return resp.data if resp.data else []
+            resp = sb.table("subscribers").select("*").execute()
+            rows = resp.data if resp.data else []
+            # Filter active in Python (handles both bool and string "true")
+            return [r for r in rows if r.get("active") in (True, "true", "True")]
         except Exception:
-            return []
+            pass  # fall through to JSON
     return _load_json("subscribers.json")
 
 
