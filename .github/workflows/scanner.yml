@@ -1,0 +1,40 @@
+name: Market Scanner
+
+on:
+  schedule:
+    # Run every 2 minutes — GitHub Actions cron only supports 5-min minimum,
+    # so we use 5-min cron + a loop inside the job to run twice
+    - cron: '*/5 3,4,5,6,7,8,9 * * 1-5'  # UTC 3:45-9:45 = IST 9:15-15:15
+  workflow_dispatch:  # manual trigger for testing
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scanner (pass 1)
+        env:
+          FAST2SMS_API_KEY: ${{ secrets.FAST2SMS_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scanner.py
+
+      - name: Wait 2.5 minutes
+        run: sleep 150
+
+      - name: Run scanner (pass 2)
+        env:
+          FAST2SMS_API_KEY: ${{ secrets.FAST2SMS_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scanner.py
