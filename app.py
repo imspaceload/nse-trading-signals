@@ -146,37 +146,31 @@ with st.sidebar:
         st.warning("🔴 Market Closed")
     st.caption(now.strftime("%d %b %Y, %I:%M %p IST"))
 
-    # ── Watchlist ──
+    # ── Watchlist (loads only during market hours, cached 2 min) ──
     st.divider()
     st.markdown("##### 👀 Watchlist")
-    WATCHLIST_SYMBOLS = {
-        "NIFTY 50": SYMBOLS["NIFTY 50"],
-        "BANK NIFTY": SYMBOLS["BANK NIFTY"],
-        "SENSEX": SYMBOLS["SENSEX"],
-        "RELIANCE": SYMBOLS["RELIANCE"],
-        "HDFC BANK": SYMBOLS["HDFC BANK"],
-        "TCS": SYMBOLS["TCS"],
-    }
+    WATCHLIST_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX", "RELIANCE", "HDFC BANK", "TCS"]
 
-    @st.cache_data(ttl=60)
-    def fetch_watchlist_prices():
-        results = {}
-        def _fetch(name, info):
-            try:
-                p = get_spot_price(info["yf"])
-                return name, p
-            except Exception:
-                return name, None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-            futs = [ex.submit(_fetch, n, i) for n, i in WATCHLIST_SYMBOLS.items()]
-            for f in concurrent.futures.as_completed(futs):
-                n, p = f.result()
-                results[n] = p
-        return results
+    if is_market_open():
+        @st.cache_data(ttl=120)
+        def fetch_watchlist_prices():
+            results = {}
+            def _fetch(name):
+                try:
+                    return name, get_spot_price(SYMBOLS[name]["yf"])
+                except Exception:
+                    return name, None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+                for f in concurrent.futures.as_completed([ex.submit(_fetch, n) for n in WATCHLIST_SYMBOLS]):
+                    n, p = f.result()
+                    results[n] = p
+            return results
+        wl_prices = fetch_watchlist_prices()
+    else:
+        wl_prices = {}
 
-    wl_prices = fetch_watchlist_prices()
     wl_html = ""
-    for wl_name, wl_info in WATCHLIST_SYMBOLS.items():
+    for wl_name in WATCHLIST_SYMBOLS:
         p = wl_prices.get(wl_name)
         if p is not None:
             wl_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#e5e7eb;font-size:0.85em;">{wl_name}</span><span style="color:#22c55e;font-size:0.85em;font-weight:600;">₹{p:,.2f}</span></div>'
@@ -214,15 +208,15 @@ def fetch_data(yf_symbol, nse_symbol, period, interval):
             oi_future = executor.submit(get_option_chain_data, nse_symbol) if nse_symbol else None
 
             try:
-                spot = price_future.result(timeout=45)
+                spot = price_future.result(timeout=10)
             except Exception:
                 spot = None
             try:
-                df = df_future.result(timeout=45)
+                df = df_future.result(timeout=10)
             except Exception:
                 df = pd.DataFrame()
             try:
-                oi = oi_future.result(timeout=20) if oi_future else None
+                oi = oi_future.result(timeout=8) if oi_future else None
             except Exception:
                 oi = None
     except Exception:
@@ -569,7 +563,7 @@ with tab_optchain:
     else:
         st.markdown(f"### 🔗 Option Chain — {selected_symbol} ({sym['nse']})")
 
-        @st.cache_data(ttl=60)
+        @st.cache_data(ttl=120)
         def fetch_full_option_chain(nse_sym):
             try:
                 from nsepython import option_chain
@@ -580,7 +574,8 @@ with tab_optchain:
                 pass
             return None
 
-        oc_data = fetch_full_option_chain(sym["nse"])
+        with st.spinner("Loading option chain..."):
+            oc_data = fetch_full_option_chain(sym["nse"])
         if oc_data is None:
             st.warning("Could not fetch option chain data. Will retry on next refresh.")
         else:
@@ -789,15 +784,16 @@ with tab_portfolio:
     st.markdown("#### 🟢 Open Positions")
     if port_open:
         for t in reversed(port_open):
-            # Try to get current LTP for unrealized P&L
-            t_sym_info = SYMBOLS.get(t["instrument"], {})
-            t_nse = t_sym_info.get("nse", "")
+            # Fetch current LTP only during market hours (avoid slow calls when closed)
             current_ltp = None
-            if t_nse:
-                try:
-                    current_ltp = get_current_option_ltp(t_nse, t["strike"], t["option_type"], t["expiry"])
-                except Exception:
-                    pass
+            if is_market_open():
+                t_sym_info = SYMBOLS.get(t["instrument"], {})
+                t_nse = t_sym_info.get("nse", "")
+                if t_nse:
+                    try:
+                        current_ltp = get_current_option_ltp(t_nse, t["strike"], t["option_type"], t["expiry"])
+                    except Exception:
+                        pass
 
             card_html = f'<div class="trade-card trade-open">'
             card_html += f'<h3>🟢 {t["instrument"]} {int(t["strike"])} {t["option_type"]} ({t["expiry"]})</h3>'

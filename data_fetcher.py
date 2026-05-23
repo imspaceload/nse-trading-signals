@@ -29,20 +29,8 @@ def is_market_open() -> bool:
 
 
 def get_spot_price(symbol: str) -> Optional[float]:
-    """Fetch latest price with retry logic for cloud environments."""
-    for attempt in range(3):
-        try:
-            ticker = yf.Ticker(symbol)
-            data = ticker.history(period="1d", interval="1m")
-            if data.empty:
-                data = ticker.history(period="5d", interval="5m")
-            if not data.empty:
-                return round(float(data["Close"].iloc[-1]), 2)
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(1)
-            continue
-    # Final fallback: try fast_info
+    """Fetch latest price — fast_info first (fastest), fallback to history."""
+    # Try fast_info first (no data download needed — much faster)
     try:
         ticker = yf.Ticker(symbol)
         price = ticker.fast_info.get("lastPrice") or ticker.fast_info.get("regularMarketPrice")
@@ -50,32 +38,36 @@ def get_spot_price(symbol: str) -> Optional[float]:
             return round(float(price), 2)
     except Exception:
         pass
+    # Fallback: history
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period="1d", interval="1m")
+        if data.empty:
+            data = ticker.history(period="5d", interval="5m")
+        if not data.empty:
+            return round(float(data["Close"].iloc[-1]), 2)
+    except Exception:
+        pass
     return None
 
 
 def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    """Fetch intraday OHLCV with retry logic."""
-    for attempt in range(3):
-        try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval=interval)
-            if not df.empty:
-                return df
-        except Exception:
-            if attempt < 2:
-                time.sleep(1)
-            continue
-
-    # Fallback: try shorter period
-    for fallback_period in ["1d", "5d"]:
-        try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=fallback_period, interval=interval)
-            if not df.empty:
-                return df
-        except Exception:
-            continue
-
+    """Fetch intraday OHLCV — single attempt, fast."""
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval=interval)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+    # One fallback with shorter period
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="1d", interval=interval)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
