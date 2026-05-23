@@ -1,6 +1,7 @@
-"""SMS broadcast module using Twilio API."""
+"""SMS broadcast module using Fast2SMS API."""
 import os
 import json
+import requests
 from datetime import datetime
 from typing import List, Optional
 import pytz
@@ -11,9 +12,7 @@ IST = pytz.timezone("Asia/Kolkata")
 SUBSCRIBERS_FILE = "subscribers.json"
 SMS_LOG_FILE = "sms_log.json"
 
-TWILIO_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM = os.environ.get("TWILIO_FROM_NUMBER", "")
+FAST2SMS_API_KEY = os.environ.get("FAST2SMS_API_KEY", "")
 
 
 def _load_json(path: str) -> list:
@@ -37,9 +36,9 @@ def get_subscribers() -> List[dict]:
 
 def add_subscriber(phone: str, name: str = "") -> bool:
     subs = get_subscribers()
-    phone = phone.strip()
-    if not phone.startswith("+"):
-        phone = "+91" + phone.lstrip("0")
+    phone = _normalize_phone(phone)
+    if not phone:
+        return False
     for s in subs:
         if s["phone"] == phone:
             return False  # already exists
@@ -55,14 +54,25 @@ def add_subscriber(phone: str, name: str = "") -> bool:
 
 def remove_subscriber(phone: str) -> bool:
     subs = get_subscribers()
-    phone = phone.strip()
-    if not phone.startswith("+"):
-        phone = "+91" + phone.lstrip("0")
+    phone = _normalize_phone(phone)
+    if not phone:
+        return False
     new_subs = [s for s in subs if s["phone"] != phone]
     if len(new_subs) < len(subs):
         _save_json(SUBSCRIBERS_FILE, new_subs)
         return True
     return False
+
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize to 10-digit Indian mobile number (Fast2SMS format)."""
+    phone = phone.strip().lstrip("+")
+    if phone.startswith("91") and len(phone) == 12:
+        phone = phone[2:]
+    phone = phone.lstrip("0")
+    if len(phone) == 10 and phone.isdigit():
+        return phone
+    return ""
 
 
 # ── SMS Sending ──
@@ -98,7 +108,7 @@ def _format_trade_sms(trade: dict, action: str = "BUY") -> str:
 
 
 def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
-    """Send SMS to all active subscribers. Returns delivery log."""
+    """Send SMS to all active subscribers via Fast2SMS. Returns delivery log."""
     subs = [s for s in get_subscribers() if s.get("active", True)]
     if not subs:
         return []
@@ -107,14 +117,14 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
     log_entries = []
     now = datetime.now(IST).isoformat()
 
-    if not TWILIO_SID or not TWILIO_AUTH or not TWILIO_FROM:
-        # No Twilio configured — log as failed
+    if not FAST2SMS_API_KEY:
+        # No API key configured — log as failed
         for s in subs:
             log_entries.append({
                 "phone": s["phone"],
                 "message": message_body,
                 "status": "failed",
-                "error": "Twilio not configured",
+                "error": "Fast2SMS API key not configured",
                 "timestamp": now,
             })
         logs = _load_json(SMS_LOG_FILE)
@@ -122,38 +132,46 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
         _save_json(SMS_LOG_FILE, logs[-200:])  # keep last 200
         return log_entries
 
+    # Fast2SMS Quick SMS — bulk send to all numbers in one call
+    phone_list = ",".join(s["phone"] for s in subs)
+    headers = {
+        "authorization": FAST2SMS_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "route": "q",
+        "message": message_body,
+        "language": "english",
+        "flash": 0,
+        "numbers": phone_list,
+    }
+
     try:
-        from twilio.rest import Client
-        client = Client(TWILIO_SID, TWILIO_AUTH)
-    except ImportError:
+        resp = requests.post(
+            "https://www.fast2sms.com/dev/bulkV2",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+        result = resp.json()
+        api_ok = result.get("return", False)
+        api_status = "sent" if api_ok else "failed"
+        api_msg = result.get("message", "")
+        if isinstance(api_msg, list):
+            api_msg = api_msg[0] if api_msg else ""
+        request_id = result.get("request_id", "")
+
         for s in subs:
             log_entries.append({
                 "phone": s["phone"],
                 "message": message_body,
-                "status": "failed",
-                "error": "twilio package not installed",
+                "status": api_status,
+                "request_id": request_id,
+                "api_response": str(api_msg)[:100],
                 "timestamp": now,
             })
-        logs = _load_json(SMS_LOG_FILE)
-        logs.extend(log_entries)
-        _save_json(SMS_LOG_FILE, logs[-200:])
-        return log_entries
-
-    for s in subs:
-        try:
-            msg = client.messages.create(
-                body=message_body,
-                from_=TWILIO_FROM,
-                to=s["phone"],
-            )
-            log_entries.append({
-                "phone": s["phone"],
-                "message": message_body,
-                "status": msg.status,
-                "sid": msg.sid,
-                "timestamp": now,
-            })
-        except Exception as e:
+    except Exception as e:
+        for s in subs:
             log_entries.append({
                 "phone": s["phone"],
                 "message": message_body,
