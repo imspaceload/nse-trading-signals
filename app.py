@@ -115,21 +115,32 @@ st.markdown("""
 #  SIDEBAR
 # ══════════════════════════════════════════
 
+def _make_sym(name: str) -> dict:
+    """Auto-construct yf/nse/tv keys for any NSE symbol."""
+    n = name.strip().upper()
+    return {"yf": f"{n}.NS", "nse": n, "tv": f"NSE:{n}"}
+
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
-    # Search bar to filter symbol list
-    symbol_search = st.text_input("🔍 Search Symbol", placeholder="Type to filter...", key="sym_search")
+    # Quick select from favorites OR type any NSE symbol
     all_symbols = list(SYMBOLS.keys())
-    if symbol_search.strip():
-        filtered = [s for s in all_symbols if symbol_search.strip().upper() in s.upper()]
-    else:
-        filtered = all_symbols
-    if not filtered:
-        filtered = all_symbols  # fallback if no match
-
-    selected_symbol = st.selectbox("Select Stock / Index", filtered, index=0)
+    selected_symbol = st.selectbox("⭐ Quick Select", all_symbols, index=0, key="quick_sym")
     sym = SYMBOLS[selected_symbol]
+
+    st.markdown('<p style="color:#6b7280;font-size:0.8em;margin:4px 0;">— OR type any NSE/BSE symbol —</p>', unsafe_allow_html=True)
+    custom_sym = st.text_input("🔍 Any Symbol", placeholder="e.g. IDEA, BAJFINANCE, IRFC...", key="custom_sym")
+    if custom_sym.strip():
+        custom_upper = custom_sym.strip().upper()
+        # Check if it's in our favorites first
+        match = [k for k in SYMBOLS if custom_upper in k.upper() or custom_upper == SYMBOLS[k].get("nse", "").upper()]
+        if match:
+            selected_symbol = match[0]
+            sym = SYMBOLS[selected_symbol]
+        else:
+            # Auto-construct for any NSE symbol
+            selected_symbol = custom_upper
+            sym = _make_sym(custom_upper)
 
     chart_period = st.selectbox("Chart Period", ["1d", "5d", "1mo"], index=1)
     chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"], index=1)
