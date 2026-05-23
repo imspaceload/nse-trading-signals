@@ -214,14 +214,16 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
         _log_sms(log_entries)
         return log_entries
 
-    # Fast2SMS Quick SMS — bulk send
+    # Fast2SMS — try v3 route first (works without DLT), fallback to q
     phone_list = ",".join(s["phone"] for s in subs)
     headers = {
         "authorization": FAST2SMS_API_KEY,
-        "Content-Type": "application/json",
     }
+
+    # Try v3 (SMS) route
     payload = {
-        "route": "q",
+        "route": "v3",
+        "sender_id": "TXTIND",
         "message": message_body,
         "language": "english",
         "flash": 0,
@@ -231,12 +233,26 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
     try:
         resp = requests.post(
             "https://www.fast2sms.com/dev/bulkV2",
-            json=payload,
             headers=headers,
+            json=payload,
             timeout=30,
         )
         result = resp.json()
         api_ok = result.get("return", False)
+
+        # If v3 fails, try quick (q) route
+        if not api_ok:
+            payload["route"] = "q"
+            payload.pop("sender_id", None)
+            resp = requests.post(
+                "https://www.fast2sms.com/dev/bulkV2",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            result = resp.json()
+            api_ok = result.get("return", False)
+
         api_status = "sent" if api_ok else "failed"
         api_msg = result.get("message", "")
         if isinstance(api_msg, list):

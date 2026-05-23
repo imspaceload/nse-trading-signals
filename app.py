@@ -735,7 +735,14 @@ with tab_sms:
             results = send_sms_to_all(test_trade, action="BUY")
             if results:
                 sent = sum(1 for r in results if r["status"] != "failed")
-                st.success(f"Test SMS sent to {sent} subscriber(s)")
+                failed = sum(1 for r in results if r["status"] == "failed")
+                if sent > 0:
+                    st.success(f"Test SMS delivered to {sent} subscriber(s)")
+                elif failed > 0:
+                    err = results[0].get("api_response", results[0].get("error", "unknown"))
+                    st.error(f"SMS attempted to {failed} subscriber(s) but failed: {err}")
+                else:
+                    st.warning(f"SMS sent to {len(results)} subscriber(s) — check log for status")
             else:
                 st.info("No subscribers to send to.")
 
