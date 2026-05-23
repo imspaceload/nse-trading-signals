@@ -240,10 +240,20 @@ if data_ok:
     # ══════════════════════════════════════════
 
     alert_key = f"last_auto_signal_{selected_symbol}"
+    cooldown_key = f"last_signal_time_{selected_symbol}"
     last_auto = st.session_state.get(alert_key, None)
+    last_signal_time = st.session_state.get(cooldown_key, None)
 
-    if action in ("BUY", "SELL") and action != last_auto:
+    # 15-minute cooldown: no new signal of ANY type can fire for same instrument
+    cooldown_ok = True
+    if last_signal_time is not None:
+        elapsed = (datetime.now(IST) - last_signal_time).total_seconds()
+        if elapsed < 900:  # 15 minutes = 900 seconds
+            cooldown_ok = False
+
+    if action in ("BUY", "SELL") and action != last_auto and cooldown_ok:
         st.session_state[alert_key] = action
+        st.session_state[cooldown_key] = datetime.now(IST)
 
         # ── 1. Auto-create trade from signal ──
         opt_type = "CE" if action == "BUY" else "PE"
@@ -338,6 +348,9 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
 
     if sms_sent_this_run:
         st.success(f"🚀 AUTO SIGNAL FIRED: {action} {selected_symbol} — SMS sent to {sms_sent_count} subscriber(s)" + (f", {sms_fail_count} failed" if sms_fail_count else ""))
+    elif action in ("BUY", "SELL") and not cooldown_ok:
+        remaining = 900 - int((datetime.now(IST) - last_signal_time).total_seconds())
+        st.warning(f"⏳ Signal: {action} — cooldown active ({remaining // 60}m {remaining % 60}s left). Prevents whipsaw trades.")
     elif action in ("BUY", "SELL"):
         st.info(f"📱 Last signal: {action} — already sent (waiting for new signal)")
     else:
