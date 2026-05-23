@@ -536,9 +536,22 @@ with tab_signals:
 with tab_chart:
     tv_symbol = sym.get("tv", "NSE:NIFTY")
     tv_widget_html = f"""
-    <div style="height:600px;">
-      <iframe src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol={tv_symbol}&interval=5&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0e1117&studies=RSI%40tv-basicstudies&studies=MACD%40tv-basicstudies&theme=dark&style=1&timezone=Asia%2FKolkata&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=en&utm_source=localhost&utm_medium=widget_new&utm_campaign=chart"
-        style="width:100%;height:100%;border:none;" allowtransparency="true" frameborder="0"></iframe>
+    <div class="tradingview-widget-container" style="height:600px;width:100%;">
+      <div class="tradingview-widget-container__widget" style="height:100%;width:100%;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+      {{
+        "autosize": true,
+        "symbol": "{tv_symbol}",
+        "interval": "5",
+        "timezone": "Asia/Kolkata",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "allow_symbol_change": true,
+        "calendar": false,
+        "support_host": "https://www.tradingview.com"
+      }}
+      </script>
     </div>
     """
     components.html(tv_widget_html, height=620, scrolling=False)

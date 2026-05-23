@@ -66,6 +66,27 @@ SYMBOLS = {
     "BAJAJ-AUTO":       {"yf": "BAJAJ-AUTO.NS",   "nse": "BAJAJ-AUTO",  "tv": "NSE:BAJAJ_AUTO"},
     "BRITANNIA":        {"yf": "BRITANNIA.NS",    "nse": "BRITANNIA",   "tv": "NSE:BRITANNIA"},
     "SHRIRAMFIN":       {"yf": "SHRIRAMFIN.NS",   "nse": "SHRIRAMFIN",  "tv": "NSE:SHRIRAMFIN"},
+    # Popular F&O stocks
+    "IDEA":             {"yf": "IDEA.NS",         "nse": "IDEA",        "tv": "NSE:IDEA"},
+    "TATAPOWER":        {"yf": "TATAPOWER.NS",    "nse": "TATAPOWER",   "tv": "NSE:TATAPOWER"},
+    "ZOMATO":           {"yf": "ZOMATO.NS",       "nse": "ZOMATO",      "tv": "NSE:ZOMATO"},
+    "IRCTC":            {"yf": "IRCTC.NS",        "nse": "IRCTC",       "tv": "NSE:IRCTC"},
+    "PNB":              {"yf": "PNB.NS",          "nse": "PNB",         "tv": "NSE:PNB"},
+    "BANKBARODA":       {"yf": "BANKBARODA.NS",   "nse": "BANKBARODA",  "tv": "NSE:BANKBARODA"},
+    "VEDL":             {"yf": "VEDL.NS",         "nse": "VEDL",        "tv": "NSE:VEDL"},
+    "TATACOMM":         {"yf": "TATACOMM.NS",     "nse": "TATACOMM",    "tv": "NSE:TATACOMM"},
+    "DLF":              {"yf": "DLF.NS",          "nse": "DLF",         "tv": "NSE:DLF"},
+    "IDFCFIRSTB":       {"yf": "IDFCFIRSTB.NS",   "nse": "IDFCFIRSTB",  "tv": "NSE:IDFCFIRSTB"},
+    "BHEL":             {"yf": "BHEL.NS",         "nse": "BHEL",        "tv": "NSE:BHEL"},
+    "SAIL":             {"yf": "SAIL.NS",         "nse": "SAIL",        "tv": "NSE:SAIL"},
+    "RECLTD":           {"yf": "RECLTD.NS",       "nse": "RECLTD",      "tv": "NSE:RECLTD"},
+    "PFC":              {"yf": "PFC.NS",          "nse": "PFC",         "tv": "NSE:PFC"},
+    "HAL":              {"yf": "HAL.NS",          "nse": "HAL",         "tv": "NSE:HAL"},
+    "BEL":              {"yf": "BEL.NS",          "nse": "BEL",         "tv": "NSE:BEL"},
+    "LICHSGFIN":        {"yf": "LICHSGFIN.NS",    "nse": "LICHSGFIN",   "tv": "NSE:LICHSGFIN"},
+    "MOTHERSON":        {"yf": "MOTHERSON.NS",    "nse": "MOTHERSON",   "tv": "NSE:MOTHERSON"},
+    "MANAPPURAM":       {"yf": "MANAPPURAM.NS",   "nse": "MANAPPURAM",  "tv": "NSE:MANAPPURAM"},
+    "MUTHOOTFIN":       {"yf": "MUTHOOTFIN.NS",   "nse": "MUTHOOTFIN",  "tv": "NSE:MUTHOOTFIN"},
 }
 
 MARKET_OPEN_HOUR = 9
