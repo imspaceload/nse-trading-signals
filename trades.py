@@ -85,6 +85,7 @@ def create_trade(
         "stop_loss": round(stop_loss, 2),
         "quantity": quantity,
         "lot_size": lot_size,
+        "averaging_price": round(entry_price * 0.7, 2),  # default 30% below entry
         "status": "OPEN",
         "created_at": datetime.now(IST).isoformat(),
         "exit_price": None,

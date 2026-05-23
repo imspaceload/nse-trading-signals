@@ -154,19 +154,15 @@ def _format_trade_sms(trade: dict, action: str = "BUY") -> str:
     opt_type = trade.get("option_type", "CE")
     entry = trade.get("entry_price", 0)
     target = trade.get("target_price", 0)
-    sl = trade.get("stop_loss", 0)
+    avg = trade.get("averaging_price", round(entry * 0.7, 2) if entry else 0)
 
     if action == "EXIT":
         exit_price = trade.get("exit_price", 0)
         pnl = trade.get("pnl", 0)
         sign = "+" if pnl >= 0 else ""
-        return f"EXIT {symbol} {strike}{opt_type} at Rs{exit_price} | P&L: {sign}{pnl}"
+        return f"EXIT {symbol} {strike}{opt_type} at Rs{exit_price} P&L: {sign}{pnl}"
 
-    msg = f"BUY {symbol} {strike}{opt_type} at Rs{entry}"
-    if target:
-        msg += f" Target Rs{target}"
-    if sl:
-        msg += f" SL Rs{sl}"
+    msg = f"BUY {symbol} {strike}{opt_type} @ Rs{entry} Target Rs{target} Avg Rs{avg}"
     return msg[:160]
 
 

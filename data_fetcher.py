@@ -198,6 +198,7 @@ def get_option_recommendation(symbol_nse: str, spot_price: float, action: str) -
             else:
                 best_option["premium_sl"] = round(best_option["ltp"] * 0.7, 2)
                 best_option["premium_target"] = round(best_option["ltp"] * 1.5, 2)
+            best_option["premium_avg"] = round(best_option["ltp"] * 0.7, 2)  # average at 30% below entry
 
         return best_option
     except Exception:

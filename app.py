@@ -19,6 +19,7 @@ from data_fetcher import (
 from indicators import (
     compute_rsi, compute_macd, compute_supertrend, compute_vwap,
     evaluate_oi, generate_signal, compute_all_signals,
+    compute_support_resistance,
 )
 from news_scraper import scrape_moneycontrol_news
 from claude_analyzer import analyze_market
@@ -320,6 +321,7 @@ if data_ok:
                 quantity=1,
                 lot_size=option_rec["lot_size"],
             )
+            auto_trade["averaging_price"] = option_rec.get("premium_avg", round(option_rec["ltp"] * 0.7, 2))
         else:
             auto_trade = create_trade(
                 instrument=selected_symbol,
@@ -434,28 +436,34 @@ with tab_signals:
                 panel_css = "action-buy"
                 icon_str = "🟢 BUY"
                 if option_rec:
+                    avg_price = option_rec.get("premium_avg", round(option_rec["ltp"] * 0.7, 2))
                     steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
-                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
-                    steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📉 Average at: <b>₹{avg_price:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically</div>'
                 else:
                     steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>CE (Call)</b> ATM strike near ₹{spot_price:,.0f}</div>'
-                    steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{spot_price:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📉 Average at: <b>₹{round(spot_price * 0.7, 2):,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically</div>'
             elif action == "SELL":
                 panel_css = "action-sell"
                 icon_str = "🔴 SELL"
                 if option_rec:
+                    avg_price = option_rec.get("premium_avg", round(option_rec["ltp"] * 0.7, 2))
                     steps_html = f'<div class="step">📌 Auto-picked: <b>{option_rec["contract"]}</b></div>'
-                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b> x {option_rec["lot_size"]} qty</div>'
-                    steps_html += f'<div class="step">💵 Total premium: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">🛑 SL: <b>₹{option_rec["premium_sl"]:,.2f}</b> | 🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📉 Average at: <b>₹{avg_price:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically</div>'
                 else:
                     steps_html = f'<div class="step">📌 {selected_symbol} — Buy <b>PE (Put)</b> ATM strike near ₹{spot_price:,.0f}</div>'
-                    steps_html += f'<div class="step">🛑 SL: <b>₹{signal["stop_loss"]:,.2f}</b> | 🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
-                    steps_html += f'<div class="step">📱 SMS sent automatically to all subscribers</div>'
+                    steps_html += f'<div class="step">💰 Entry: <b>₹{spot_price:,.2f}</b></div>'
+                    steps_html += f'<div class="step">🎯 Target: <b>₹{signal["target"]:,.2f}</b></div>'
+                    steps_html += f'<div class="step">📉 Average at: <b>₹{round(spot_price * 0.7, 2):,.2f}</b></div>'
+                    steps_html += f'<div class="step">📱 SMS sent automatically</div>'
             else:
                 panel_css = "action-hold"
                 icon_str = "🟡 HOLD"
@@ -468,13 +476,14 @@ with tab_signals:
             st.markdown(panel_html, unsafe_allow_html=True)
 
             if option_rec:
+                opt_avg = option_rec.get("premium_avg", round(option_rec["ltp"] * 0.7, 2))
                 opt_html = f'<div class="option-card"><h3>📋 Option Contract (Auto-Selected)</h3>'
                 opt_html += f'<div class="contract">{option_rec["contract"]}</div>'
                 opt_html += f'<div class="detail">Expiry: <b>{option_rec["expiry"]}</b></div>'
                 opt_html += f'<div class="detail">Premium: <b>₹{option_rec["ltp"]:,.2f}</b> | Bid: ₹{option_rec["bid"]:,.2f} Ask: ₹{option_rec["ask"]:,.2f}</div>'
                 opt_html += f'<div class="detail">Lot: <b>{option_rec["lot_size"]}</b> | Total: <b>₹{option_rec["total_premium"]:,.2f}</b></div>'
                 opt_html += f'<div class="detail">OI: {option_rec["oi"]:,} | OI Δ: {option_rec["oi_change"]:,} | IV: {option_rec["iv"]}%</div>'
-                opt_html += f'<div class="detail" style="margin-top:8px;font-weight:700;">🛑 SL: ₹{option_rec["premium_sl"]:,.2f} | 🎯 Target: ₹{option_rec["premium_target"]:,.2f}</div>'
+                opt_html += f'<div class="detail" style="margin-top:8px;font-weight:700;">💰 Entry: ₹{option_rec["ltp"]:,.2f} | 🎯 Target: ₹{option_rec["premium_target"]:,.2f} | 📉 Avg: ₹{opt_avg:,.2f}</div>'
                 opt_html += '</div>'
                 st.markdown(opt_html, unsafe_allow_html=True)
 
@@ -533,28 +542,24 @@ with tab_signals:
 with tab_chart:
     tv_symbol = sym.get("tv", "NSE:NIFTY")
     tv_widget_html = f"""
-    <div class="tradingview-widget-container" style="height:600px;">
-      <div id="tradingview_chart" style="height:100%;"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget({{
-        "autosize": true,
-        "symbol": "{tv_symbol}",
-        "interval": "5",
-        "timezone": "Asia/Kolkata",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bkg_color": "#0e1117",
-        "enable_publishing": false,
-        "allow_symbol_change": true,
-        "studies": ["RSI@tv-basicstudies", "MACD@tv-basicstudies", "SuperTrend@tv-basicstudies"],
-        "container_id": "tradingview_chart"
-      }});
-      </script>
+    <div style="height:600px;">
+      <iframe src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol={tv_symbol}&interval=5&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0e1117&studies=RSI%40tv-basicstudies&studies=MACD%40tv-basicstudies&theme=dark&style=1&timezone=Asia%2FKolkata&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=en&utm_source=localhost&utm_medium=widget_new&utm_campaign=chart"
+        style="width:100%;height:100%;border:none;" allowtransparency="true" frameborder="0"></iframe>
     </div>
     """
     components.html(tv_widget_html, height=620, scrolling=False)
+
+    if data_ok:
+        sr = compute_support_resistance(df)
+        # Show as colored cards in a row
+        sr_html = '<div style="display:flex;gap:8px;margin-top:12px;justify-content:center;">'
+        sr_html += f'<div style="background:#7f1d1d;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">S2</span><br><span style="color:#ef4444;font-weight:700;">₹{sr["s2"]:,.2f}</span></div>'
+        sr_html += f'<div style="background:#991b1b;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">S1</span><br><span style="color:#f87171;font-weight:700;">₹{sr["s1"]:,.2f}</span></div>'
+        sr_html += f'<div style="background:#1e293b;padding:8px 16px;border-radius:8px;text-align:center;border:2px solid #6366f1;"><span style="color:#94a3b8;font-size:0.7em;">PIVOT</span><br><span style="color:#a5b4fc;font-weight:700;">₹{sr["pivot"]:,.2f}</span></div>'
+        sr_html += f'<div style="background:#064e3b;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">R1</span><br><span style="color:#34d399;font-weight:700;">₹{sr["r1"]:,.2f}</span></div>'
+        sr_html += f'<div style="background:#065f46;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">R2</span><br><span style="color:#22c55e;font-weight:700;">₹{sr["r2"]:,.2f}</span></div>'
+        sr_html += '</div>'
+        st.markdown(sr_html, unsafe_allow_html=True)
 
 
 # ── TAB 3: OPTION CHAIN ──

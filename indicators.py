@@ -124,6 +124,25 @@ def evaluate_oi(oi_data: Optional[dict]) -> dict:
     return {"signal": signal, "pcr": pcr, "net_oi_change": net_oi_change}
 
 
+def compute_support_resistance(df: pd.DataFrame) -> dict:
+    """Compute 2 support, 2 resistance, and pivot from recent price data."""
+    high = float(df["High"].max())
+    low = float(df["Low"].min())
+    close = float(df["Close"].iloc[-1])
+
+    pivot = round((high + low + close) / 3, 2)
+    r1 = round(2 * pivot - low, 2)
+    r2 = round(pivot + (high - low), 2)
+    s1 = round(2 * pivot - high, 2)
+    s2 = round(pivot - (high - low), 2)
+
+    return {
+        "pivot": pivot,
+        "r1": r1, "r2": r2,
+        "s1": s1, "s2": s2,
+    }
+
+
 def compute_all_signals(df: pd.DataFrame, interval: str = "5m") -> list:
     """Detect high-quality crossover signals on the chart.
 
