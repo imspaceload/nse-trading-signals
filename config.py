@@ -62,3 +62,7 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER", "")     # client's email to re
 
 # Fast2SMS Settings
 FAST2SMS_API_KEY = os.environ.get("FAST2SMS_API_KEY", "")  # https://www.fast2sms.com
+
+# Supabase Settings (persistent storage for subscribers + SMS log)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")

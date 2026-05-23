@@ -1,4 +1,4 @@
-"""SMS broadcast module using Fast2SMS API."""
+"""SMS broadcast module using Fast2SMS API + Supabase for persistent storage."""
 import os
 import json
 import requests
@@ -8,12 +8,30 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# File-based storage for subscribers and SMS logs
-SUBSCRIBERS_FILE = "subscribers.json"
-SMS_LOG_FILE = "sms_log.json"
-
 FAST2SMS_API_KEY = os.environ.get("FAST2SMS_API_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
+# Lazy-initialized Supabase client
+_supabase_client = None
+
+
+def _get_supabase():
+    """Lazy init Supabase client. Returns None if not configured."""
+    global _supabase_client
+    if _supabase_client is not None:
+        return _supabase_client
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        from supabase import create_client
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        return _supabase_client
+    except Exception:
+        return None
+
+
+# ── Fallback: JSON file storage (used when Supabase not configured) ──
 
 def _load_json(path: str) -> list:
     try:
@@ -31,35 +49,74 @@ def _save_json(path: str, data: list):
 # ── Subscriber Management ──
 
 def get_subscribers() -> List[dict]:
-    return _load_json(SUBSCRIBERS_FILE)
+    sb = _get_supabase()
+    if sb:
+        try:
+            resp = sb.table("subscribers").select("*").eq("active", True).execute()
+            return resp.data if resp.data else []
+        except Exception:
+            return []
+    return _load_json("subscribers.json")
 
 
 def add_subscriber(phone: str, name: str = "") -> bool:
-    subs = get_subscribers()
     phone = _normalize_phone(phone)
     if not phone:
         return False
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            # Check if already exists
+            existing = sb.table("subscribers").select("phone").eq("phone", phone).execute()
+            if existing.data:
+                return False
+            sb.table("subscribers").insert({
+                "phone": phone,
+                "name": name.strip(),
+                "added": datetime.now(IST).isoformat(),
+                "active": True,
+            }).execute()
+            return True
+        except Exception:
+            return False
+
+    # Fallback: JSON
+    subs = _load_json("subscribers.json")
     for s in subs:
         if s["phone"] == phone:
-            return False  # already exists
+            return False
     subs.append({
         "phone": phone,
         "name": name.strip(),
         "added": datetime.now(IST).isoformat(),
         "active": True,
     })
-    _save_json(SUBSCRIBERS_FILE, subs)
+    _save_json("subscribers.json", subs)
     return True
 
 
 def remove_subscriber(phone: str) -> bool:
-    subs = get_subscribers()
     phone = _normalize_phone(phone)
     if not phone:
         return False
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            existing = sb.table("subscribers").select("phone").eq("phone", phone).execute()
+            if not existing.data:
+                return False
+            sb.table("subscribers").delete().eq("phone", phone).execute()
+            return True
+        except Exception:
+            return False
+
+    # Fallback: JSON
+    subs = _load_json("subscribers.json")
     new_subs = [s for s in subs if s["phone"] != phone]
     if len(new_subs) < len(subs):
-        _save_json(SUBSCRIBERS_FILE, new_subs)
+        _save_json("subscribers.json", new_subs)
         return True
     return False
 
@@ -107,6 +164,21 @@ def _format_trade_sms(trade: dict, action: str = "BUY") -> str:
     return msg[:160]
 
 
+def _log_sms(log_entries: List[dict]):
+    """Persist SMS log entries to Supabase or JSON fallback."""
+    sb = _get_supabase()
+    if sb:
+        try:
+            sb.table("sms_log").insert(log_entries).execute()
+            return
+        except Exception:
+            pass  # fall through to JSON
+
+    logs = _load_json("sms_log.json")
+    logs.extend(log_entries)
+    _save_json("sms_log.json", logs[-200:])
+
+
 def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
     """Send SMS to all active subscribers via Fast2SMS. Returns delivery log."""
     subs = [s for s in get_subscribers() if s.get("active", True)]
@@ -118,7 +190,6 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
     now = datetime.now(IST).isoformat()
 
     if not FAST2SMS_API_KEY:
-        # No API key configured — log as failed
         for s in subs:
             log_entries.append({
                 "phone": s["phone"],
@@ -127,12 +198,10 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
                 "error": "Fast2SMS API key not configured",
                 "timestamp": now,
             })
-        logs = _load_json(SMS_LOG_FILE)
-        logs.extend(log_entries)
-        _save_json(SMS_LOG_FILE, logs[-200:])  # keep last 200
+        _log_sms(log_entries)
         return log_entries
 
-    # Fast2SMS Quick SMS — bulk send to all numbers in one call
+    # Fast2SMS Quick SMS — bulk send
     phone_list = ",".join(s["phone"] for s in subs)
     headers = {
         "authorization": FAST2SMS_API_KEY,
@@ -180,12 +249,16 @@ def send_sms_to_all(trade: dict, action: str = "BUY") -> List[dict]:
                 "timestamp": now,
             })
 
-    # Save log
-    logs = _load_json(SMS_LOG_FILE)
-    logs.extend(log_entries)
-    _save_json(SMS_LOG_FILE, logs[-200:])
+    _log_sms(log_entries)
     return log_entries
 
 
 def get_sms_log() -> List[dict]:
-    return _load_json(SMS_LOG_FILE)
+    sb = _get_supabase()
+    if sb:
+        try:
+            resp = sb.table("sms_log").select("*").order("timestamp", desc=True).limit(200).execute()
+            return resp.data if resp.data else []
+        except Exception:
+            return []
+    return _load_json("sms_log.json")
