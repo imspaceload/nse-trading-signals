@@ -148,32 +148,25 @@ def _normalize_phone(phone: str) -> str:
 # ── SMS Sending ──
 
 def _format_trade_sms(trade: dict, action: str = "BUY") -> str:
-    """Format a trade signal into an SMS under 160 chars."""
+    """Format a trade signal into a clean SMS under 160 chars."""
     symbol = trade.get("instrument", "")
     strike = trade.get("strike", "")
     opt_type = trade.get("option_type", "CE")
-    expiry = trade.get("expiry", "")
     entry = trade.get("entry_price", 0)
     target = trade.get("target_price", 0)
     sl = trade.get("stop_loss", 0)
-    qty = trade.get("quantity", 1)
 
     if action == "EXIT":
         exit_price = trade.get("exit_price", 0)
         pnl = trade.get("pnl", 0)
         sign = "+" if pnl >= 0 else ""
-        return f"EXIT: {symbol} {strike} {opt_type} | Exit: {exit_price} | P&L: {sign}{pnl}"
+        return f"EXIT {symbol} {strike}{opt_type} at Rs{exit_price} | P&L: {sign}{pnl}"
 
-    msg = f"BUY: {symbol} {strike} {opt_type}"
-    if expiry:
-        msg += f" | Exp: {expiry}"
-    msg += f" | Entry: {entry}"
+    msg = f"BUY {symbol} {strike}{opt_type} at Rs{entry}"
     if target:
-        msg += f" | T: {target}"
+        msg += f" Target Rs{target}"
     if sl:
-        msg += f" | SL: {sl}"
-    if qty > 1:
-        msg += f" | Qty: {qty}lot"
+        msg += f" SL Rs{sl}"
     return msg[:160]
 
 

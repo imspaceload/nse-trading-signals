@@ -721,15 +721,16 @@ with tab_sms:
 
         st.markdown("##### 🧪 Send Test SMS")
         if st.button("📤 Send Test to All Subscribers", use_container_width=True):
-            _test_price = spot_price if data_ok else 23000
+            _spot = spot_price if data_ok else 23000
+            _strike = str(round(_spot / 100) * 100)
             test_trade = {
                 "instrument": selected_symbol,
-                "strike": str(round(_test_price / 100) * 100),
+                "strike": _strike,
                 "option_type": "CE",
-                "expiry": "Test",
-                "entry_price": _test_price,
-                "target_price": round(_test_price * 1.01, 2),
-                "stop_loss": round(_test_price * 0.997, 2),
+                "expiry": "Weekly",
+                "entry_price": 125,
+                "target_price": 145,
+                "stop_loss": 95,
                 "quantity": 1,
             }
             results = send_sms_to_all(test_trade, action="BUY")
