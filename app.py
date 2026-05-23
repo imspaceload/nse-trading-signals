@@ -546,24 +546,17 @@ with tab_signals:
 # ── TAB 2: CHART (TradingView Widget) ──
 with tab_chart:
     tv_symbol = sym.get("tv", "NSE:NIFTY")
+    # URL-encode the symbol (NSE:NIFTY -> NSE%3ANIFTY)
+    import urllib.parse
+    tv_encoded = urllib.parse.quote(tv_symbol, safe='')
     tv_widget_html = f"""
-    <div class="tradingview-widget-container" style="height:600px;width:100%;">
-      <div class="tradingview-widget-container__widget" style="height:100%;width:100%;"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-      {{
-        "autosize": true,
-        "symbol": "{tv_symbol}",
-        "interval": "5",
-        "timezone": "Asia/Kolkata",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "allow_symbol_change": true,
-        "calendar": false,
-        "support_host": "https://www.tradingview.com"
-      }}
-      </script>
-    </div>
+    <iframe
+      src="https://s.tradingview.com/widgetembed/?frameElementId=tv_chart_embed&symbol={tv_encoded}&interval=5&symboledit=1&saveimage=1&toolbarbg=0e1117&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&studies=RSI%40tv-basicstudies&studies=MACD%40tv-basicstudies&locale=en"
+      style="width:100%;height:600px;border:none;"
+      allowtransparency="true"
+      frameborder="0"
+      allowfullscreen>
+    </iframe>
     """
     components.html(tv_widget_html, height=620, scrolling=False)
 
