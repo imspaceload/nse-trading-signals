@@ -188,7 +188,7 @@ with st.sidebar:
     # ── Chart settings in a row ──
     c1, c2 = st.columns(2)
     with c1:
-        chart_period = st.selectbox("Period", ["1d", "5d", "1mo"], index=1, label_visibility="collapsed")
+        chart_period = st.selectbox("Period", ["1d", "5d", "1mo"], index=0, label_visibility="collapsed")
     with c2:
         chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"], index=1, label_visibility="collapsed")
 
@@ -688,9 +688,9 @@ with tab_chart:
         candle_json = json.dumps(candle_data)
         vol_json = json.dumps(vol_data)
 
-        # BUY/SELL marker data from all_signals
+        # BUY/SELL markers — only last 2 to keep chart clean
         markers = []
-        for s in all_signals:
+        for s in all_signals[-2:]:
             sig_ts = int(s["index"].timestamp()) if hasattr(s["index"], "timestamp") else 0
             if s["action"] == "BUY":
                 markers.append({
@@ -722,10 +722,11 @@ with tab_chart:
                     <span style="color:{price_color};font-weight:600;margin-left:12px;">₹{last_price:,.2f}</span>
                     <span style="color:{price_color};font-size:0.85em;margin-left:6px;">({'+' if day_chg_pct >= 0 else ''}{day_chg_pct}%)</span>
                 </div>
-                <div style="display:flex;gap:16px;font-size:0.75em;">
+                <div style="display:flex;gap:16px;align-items:center;font-size:0.75em;">
                     <span><span style="color:#a5b4fc;">━</span> Pivot</span>
                     <span><span style="color:#34d399;">┅</span> R1/R2</span>
                     <span><span style="color:#f87171;">┅</span> S1/S2</span>
+                    <button id="chart_reset_btn" style="background:#2a2e39;border:1px solid #3a3e49;color:#e5e7eb;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:1em;display:flex;align-items:center;gap:4px;" title="Reset to current">↻ Reset</button>
                 </div>
             </div>
             <div id="chart_container" style="width:100%;height:520px;background:#131722;border-radius:0 0 10px 10px;overflow:hidden;"></div>
@@ -810,6 +811,11 @@ with tab_chart:
             new ResizeObserver(function() {{
                 chart.applyOptions({{ width: container.clientWidth }});
             }}).observe(container);
+
+            // Reset button — snap chart back to fit all content
+            document.getElementById('chart_reset_btn').addEventListener('click', function() {{
+                chart.timeScale().fitContent();
+            }});
         }})();
         </script>
         """
