@@ -128,17 +128,13 @@ def _make_sym(name: str) -> dict:
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
-    # Quick select from favorites OR type any NSE symbol
-    all_symbols = list(SYMBOLS.keys())
-    selected_symbol = st.selectbox("⭐ Quick Select", all_symbols, index=0, key="quick_sym")
-    sym = SYMBOLS[selected_symbol]
+    # Type any symbol first (takes priority), or pick from favorites
+    custom_sym = st.text_input("🔍 Search Any Stock", placeholder="e.g. IDEA, BAJFINANCE, IRFC...", key="custom_sym")
 
-    st.markdown('<p style="color:#6b7280;font-size:0.8em;margin:4px 0;">— OR type any NSE/BSE symbol —</p>', unsafe_allow_html=True)
-    custom_sym = st.text_input("🔍 Any Symbol", placeholder="e.g. IDEA, BAJFINANCE, IRFC...", key="custom_sym")
     if custom_sym.strip():
         custom_upper = custom_sym.strip().upper()
         # Check if it's in our favorites first
-        match = [k for k in SYMBOLS if custom_upper in k.upper() or custom_upper == SYMBOLS[k].get("nse", "").upper()]
+        match = [k for k in SYMBOLS if custom_upper == k.upper() or custom_upper == SYMBOLS[k].get("nse", "").upper()]
         if match:
             selected_symbol = match[0]
             sym = SYMBOLS[selected_symbol]
@@ -146,6 +142,11 @@ with st.sidebar:
             # Auto-construct for any NSE symbol
             selected_symbol = custom_upper
             sym = _make_sym(custom_upper)
+        st.markdown(f'<p style="color:#22c55e;font-size:0.85em;font-weight:600;">✅ Active: {selected_symbol}</p>', unsafe_allow_html=True)
+    else:
+        all_symbols = list(SYMBOLS.keys())
+        selected_symbol = st.selectbox("⭐ Quick Select", all_symbols, index=0, key="quick_sym")
+        sym = SYMBOLS[selected_symbol]
 
     chart_period = st.selectbox("Chart Period", ["1d", "5d", "1mo"], index=1)
     chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"], index=1)
@@ -502,15 +503,36 @@ with tab_signals:
             chat_html = '<div class="chat-container">'
             now_str = datetime.now(IST).strftime("%I:%M %p")
             chat_css = f"chat-{action.lower()}"
-            chat_text = format_signal_chat(signal, selected_symbol, "")
+
+            # Current signal — show option details if available
+            if action in ("BUY", "SELL") and option_rec:
+                opt_type = "CE" if action == "BUY" else "PE"
+                avg_p = option_rec.get("premium_avg", round(option_rec["ltp"] * 0.7, 2))
+                chat_text = f'{"🟢" if action=="BUY" else "🔴"} <b>{action} {selected_symbol} {int(option_rec["strike"])}{opt_type}</b>'
+                chat_text += f'<br>💰 Entry: <b>₹{option_rec["ltp"]:,.2f}</b>'
+                chat_text += f'<br>🎯 Target: <b>₹{option_rec["premium_target"]:,.2f}</b>'
+                chat_text += f'<br>📉 Avg: <b>₹{avg_p:,.2f}</b>'
+                chat_text += f'<br>📱 SMS sent automatically'
+            elif action in ("BUY", "SELL"):
+                opt_type = "CE" if action == "BUY" else "PE"
+                atm_strike = round(spot_price / 100) * 100
+                chat_text = f'{"🟢" if action=="BUY" else "🔴"} <b>{action} {selected_symbol} {atm_strike}{opt_type}</b>'
+                chat_text += f'<br>💰 Entry: <b>₹{spot_price:,.2f}</b>'
+                chat_text += f'<br>🎯 Target: <b>₹{signal["target"]:,.2f}</b>' if signal.get("target") else ''
+                chat_text += f'<br>📱 SMS sent automatically'
+            else:
+                chat_text = f'🟡 <b>HOLD — {selected_symbol}</b><br>⏸️ No clear signal. Scanning...'
+                chat_text += f'<br>💡 {signal["buy_count"]} BUY / {signal["sell_count"]} SELL indicators'
             chat_html += f'<div class="chat-msg {chat_css}">{chat_text}<div class="chat-time">{now_str} ✓✓</div></div>'
 
+            # Historical signals — show with option format
             for s in reversed(all_signals[-5:]):
                 ts = s["index"].strftime("%I:%M %p, %d %b") if hasattr(s["index"], "strftime") else str(s["index"])
                 s_css = "chat-buy" if s["action"] == "BUY" else "chat-sell"
                 opt_type = "CE" if s["action"] == "BUY" else "PE"
                 s_icon = "🟢" if s["action"] == "BUY" else "🔴"
-                chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol}</b><br>📍 ₹{s["price"]:,.2f} → Buy {opt_type}<br>🛑 SL: ₹{s["sl"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
+                atm = round(s["price"] / 100) * 100
+                chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol} {atm}{opt_type}</b><br>💰 @ ₹{s["price"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
             chat_html += '</div>'
             st.markdown(chat_html, unsafe_allow_html=True)
 
@@ -543,9 +565,11 @@ with tab_signals:
             for s in reversed(all_signals[-8:]):
                 ts = s["index"].strftime("%d %b %H:%M") if hasattr(s["index"], "strftime") else str(s["index"])
                 ac = "#26a69a" if s["action"] == "BUY" else "#ef5350"
-                opt_label = "Buy CE" if s["action"] == "BUY" else "Buy PE"
-                rows += f'<tr><td>{ts}</td><td><span style="color:{ac};font-weight:700;">{"▲" if s["action"]=="BUY" else "▼"} {s["action"]}</span></td><td>{opt_label}</td><td>₹{s["price"]:,.2f}</td><td>₹{s["sl"]:,.2f}</td><td>₹{s["target"]:,.2f}</td></tr>'
-            st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Option</th><th>Entry</th><th>SL</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                opt_type = "CE" if s["action"] == "BUY" else "PE"
+                atm = round(s["price"] / 100) * 100
+                contract = f"{selected_symbol} {atm}{opt_type}"
+                rows += f'<tr><td>{ts}</td><td><span style="color:{ac};font-weight:700;">{"▲" if s["action"]=="BUY" else "▼"} {s["action"]}</span></td><td>{contract}</td><td>₹{s["price"]:,.2f}</td><td>₹{s["target"]:,.2f}</td></tr>'
+            st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Contract</th><th>Entry</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ── TAB 2: CHART (Candlestick with Support/Resistance) ──
