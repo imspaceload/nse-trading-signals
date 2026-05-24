@@ -123,9 +123,32 @@ st.markdown("""
     footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: #0e0e1a; border-bottom: 1px solid #2a2a4a; }
 
-    /* Watchlist item hover */
-    .wl-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a2e; cursor: pointer; transition: background 0.15s; }
-    .wl-item:hover { background: rgba(99,102,241,0.08); }
+    /* Watchlist buttons — look like clean rows */
+    div[data-testid="stSidebar"] button[kind="secondary"][key^="wl_"],
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button {
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 1px solid #1a1a2e !important;
+        border-radius: 0 !important;
+        color: #d1d5db !important;
+        font-size: 0.82em !important;
+        font-weight: 500 !important;
+        padding: 8px 4px !important;
+        text-align: left !important;
+        transition: background 0.15s !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+        background: rgba(99,102,241,0.1) !important;
+    }
+    /* Keep Refresh button styled as primary */
+    div[data-testid="stSidebar"] button[kind="primary"] {
+        background: #387ed1 !important;
+        border: none !important;
+        border-radius: 6px !important;
+        color: white !important;
+        font-weight: 600 !important;
+        padding: 8px 16px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,37 +243,33 @@ with st.sidebar:
     else:
         wl_prices = {}
 
-    # Pure HTML watchlist + SMS status — zero Streamlit widgets, zero clutter
-    wl_rows = ""
-    for wl_name in saved_watchlist:
-        p = wl_prices.get(wl_name)
-        nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
-        display_name = nse_s if nse_s else wl_name
-        price_str = f'₹{p:,.2f}' if p else '--'
-        price_clr = '#4caf50' if p else '#4b5563'
-        wl_rows += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#d1d5db;font-size:0.8em;">{display_name}</span><span style="color:{price_clr};font-size:0.8em;font-weight:600;">{price_str}</span></div>'
-
-    if not saved_watchlist:
-        wl_rows = '<div style="color:#4b5563;font-size:0.75em;padding:4px 0;">Type below to add</div>'
-
+    # Watchlist header
     subs = get_subscribers()
     sms_clr = "#4caf50" if len(subs) > 0 else "#616161"
     sms_label = "ACTIVE" if len(subs) > 0 else "NO SUBS"
 
     st.markdown(f"""
-    <div style="margin-top:14px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;overflow:hidden;">
-        <div style="padding:8px 12px;border-bottom:1px solid #1a1a2e;">
-            <span style="color:#6b7280;font-size:0.65em;text-transform:uppercase;letter-spacing:1px;">Watchlist · {len(saved_watchlist)}</span>
-        </div>
-        <div style="padding:4px 12px 8px 12px;">{wl_rows}</div>
-        <div style="padding:8px 12px;border-top:1px solid #1a1a2e;display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#9ca3af;font-size:0.72em;">📱 SMS · {len(subs)} sub(s)</span>
-            <span style="background:{sms_clr};color:white;padding:1px 6px;border-radius:2px;font-size:0.58em;font-weight:600;">{sms_label}</span>
-        </div>
+    <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#6b7280;font-size:0.65em;text-transform:uppercase;letter-spacing:1px;">Watchlist · {len(saved_watchlist)}</span>
+        <span style="color:#9ca3af;font-size:0.6em;">📱 {len(subs)} sub · <span style="color:{sms_clr};">{sms_label}</span></span>
     </div>
     """, unsafe_allow_html=True)
 
-    # Single input for watchlist management — type to add, or "- SYMBOL" to remove
+    # Clickable watchlist items — each button loads that symbol
+    for wl_name in saved_watchlist:
+        p = wl_prices.get(wl_name)
+        nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
+        display_name = nse_s if nse_s else wl_name
+        price_str = f"₹{p:,.2f}" if p else "--"
+        btn_label = f"{display_name}  ·  {price_str}"
+        if st.button(btn_label, key=f"wl_{wl_name}", use_container_width=True):
+            st.session_state["custom_sym"] = wl_name
+            st.rerun()
+
+    if not saved_watchlist:
+        st.markdown('<div style="color:#4b5563;font-size:0.75em;padding:4px 0;">Type below to add</div>', unsafe_allow_html=True)
+
+    # Add / Remove input
     wl_input = st.text_input("Watchlist", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
     if wl_input.strip():
         inp = wl_input.strip()
