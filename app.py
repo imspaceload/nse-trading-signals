@@ -125,6 +125,22 @@ def _make_sym(name: str) -> dict:
     n = name.strip().upper()
     return {"yf": f"{n}.NS", "nse": n, "tv": f"NSE:{n}"}
 
+def _atm_strike(price: float) -> int:
+    """Smart ATM strike rounding based on price level."""
+    if price <= 0:
+        return 0
+    if price < 50:
+        step = 2.5
+    elif price < 250:
+        step = 5
+    elif price < 1000:
+        step = 10  # IDEA ₹13 → 15, TATAPOWER ₹400 → 400
+    elif price < 5000:
+        step = 50
+    else:
+        step = 100  # NIFTY, RELIANCE, etc.
+    return int(round(price / step) * step)
+
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
@@ -515,8 +531,8 @@ with tab_signals:
                 chat_text += f'<br>📱 SMS sent automatically'
             elif action in ("BUY", "SELL"):
                 opt_type = "CE" if action == "BUY" else "PE"
-                atm_strike = round(spot_price / 100) * 100
-                chat_text = f'{"🟢" if action=="BUY" else "🔴"} <b>{action} {selected_symbol} {atm_strike}{opt_type}</b>'
+                atm_s = _atm_strike(spot_price)
+                chat_text = f'{"🟢" if action=="BUY" else "🔴"} <b>{action} {selected_symbol} {atm_s}{opt_type}</b>'
                 chat_text += f'<br>💰 Entry: <b>₹{spot_price:,.2f}</b>'
                 chat_text += f'<br>🎯 Target: <b>₹{signal["target"]:,.2f}</b>' if signal.get("target") else ''
                 chat_text += f'<br>📱 SMS sent automatically'
@@ -531,7 +547,7 @@ with tab_signals:
                 s_css = "chat-buy" if s["action"] == "BUY" else "chat-sell"
                 opt_type = "CE" if s["action"] == "BUY" else "PE"
                 s_icon = "🟢" if s["action"] == "BUY" else "🔴"
-                atm = round(s["price"] / 100) * 100
+                atm = _atm_strike(s["price"])
                 chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol} {atm}{opt_type}</b><br>💰 @ ₹{s["price"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
             chat_html += '</div>'
             st.markdown(chat_html, unsafe_allow_html=True)
@@ -566,7 +582,7 @@ with tab_signals:
                 ts = s["index"].strftime("%d %b %H:%M") if hasattr(s["index"], "strftime") else str(s["index"])
                 ac = "#26a69a" if s["action"] == "BUY" else "#ef5350"
                 opt_type = "CE" if s["action"] == "BUY" else "PE"
-                atm = round(s["price"] / 100) * 100
+                atm = _atm_strike(s["price"])
                 contract = f"{selected_symbol} {atm}{opt_type}"
                 rows += f'<tr><td>{ts}</td><td><span style="color:{ac};font-weight:700;">{"▲" if s["action"]=="BUY" else "▼"} {s["action"]}</span></td><td>{contract}</td><td>₹{s["price"]:,.2f}</td><td>₹{s["target"]:,.2f}</td></tr>'
             st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Contract</th><th>Entry</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
@@ -630,8 +646,44 @@ with tab_chart:
                 })
         markers_json = json.dumps(markers)
 
+        # Compute EMA 9 and EMA 21 for overlay
+        ema9_data = []
+        ema21_data = []
+        if len(df) >= 9:
+            ema9 = df["Close"].ewm(span=9, adjust=False).mean()
+            for idx_e, val in ema9.items():
+                ts_e = int(idx_e.timestamp()) if hasattr(idx_e, 'timestamp') else 0
+                ema9_data.append({"time": ts_e, "value": round(float(val), 2)})
+        if len(df) >= 21:
+            ema21 = df["Close"].ewm(span=21, adjust=False).mean()
+            for idx_e, val in ema21.items():
+                ts_e = int(idx_e.timestamp()) if hasattr(idx_e, 'timestamp') else 0
+                ema21_data.append({"time": ts_e, "value": round(float(val), 2)})
+        ema9_json = json.dumps(ema9_data)
+        ema21_json = json.dumps(ema21_data)
+
+        last_price = round(float(df["Close"].iloc[-1]), 2)
+        day_chg_pct = round(float((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100), 2)
+        price_color = "#26a69a" if day_chg_pct >= 0 else "#ef5350"
+
         chart_html = f"""
-        <div id="chart_container" style="width:100%;height:520px;background:#0e1117;border-radius:10px;overflow:hidden;"></div>
+        <div style="position:relative;">
+            <div id="chart_header" style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#131722;border-radius:10px 10px 0 0;border-bottom:1px solid #1e293b;">
+                <div>
+                    <span style="color:#e5e7eb;font-weight:700;font-size:1.1em;">{selected_symbol}</span>
+                    <span style="color:{price_color};font-weight:600;margin-left:12px;">₹{last_price:,.2f}</span>
+                    <span style="color:{price_color};font-size:0.85em;margin-left:6px;">({'+' if day_chg_pct >= 0 else ''}{day_chg_pct}%)</span>
+                </div>
+                <div style="display:flex;gap:16px;font-size:0.75em;">
+                    <span><span style="color:#ff9800;">━</span> EMA 9</span>
+                    <span><span style="color:#2196f3;">━</span> EMA 21</span>
+                    <span><span style="color:#a5b4fc;">━</span> Pivot</span>
+                    <span><span style="color:#34d399;">┅</span> R1/R2</span>
+                    <span><span style="color:#f87171;">┅</span> S1/S2</span>
+                </div>
+            </div>
+            <div id="chart_container" style="width:100%;height:520px;background:#131722;border-radius:0 0 10px 10px;overflow:hidden;"></div>
+        </div>
         <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <script>
         (function() {{
@@ -639,19 +691,69 @@ with tab_chart:
             var chart = LightweightCharts.createChart(container, {{
                 width: container.clientWidth,
                 height: 520,
-                layout: {{ background: {{ type: 'solid', color: '#0e1117' }}, textColor: '#d1d5db' }},
-                grid: {{ vertLines: {{ color: '#1e293b' }}, horzLines: {{ color: '#1e293b' }} }},
-                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-                rightPriceScale: {{ borderColor: '#1e293b' }},
-                timeScale: {{ borderColor: '#1e293b', timeVisible: true, secondsVisible: false }},
+                layout: {{
+                    background: {{ type: 'solid', color: '#131722' }},
+                    textColor: '#9ca3af',
+                    fontSize: 11,
+                }},
+                grid: {{
+                    vertLines: {{ color: 'rgba(42,46,57,0.5)' }},
+                    horzLines: {{ color: 'rgba(42,46,57,0.5)' }},
+                }},
+                crosshair: {{
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: {{ color: 'rgba(99,102,241,0.4)', width: 1, style: 2 }},
+                    horzLine: {{ color: 'rgba(99,102,241,0.4)', width: 1, style: 2 }},
+                }},
+                rightPriceScale: {{
+                    borderColor: '#2a2e39',
+                    scaleMargins: {{ top: 0.05, bottom: 0.2 }},
+                }},
+                timeScale: {{
+                    borderColor: '#2a2e39',
+                    timeVisible: true,
+                    secondsVisible: false,
+                    rightOffset: 5,
+                    barSpacing: 8,
+                }},
+                watermark: {{
+                    visible: true,
+                    text: '{selected_symbol}',
+                    color: 'rgba(99,102,241,0.08)',
+                    fontSize: 48,
+                }},
             }});
 
+            // Candlesticks
             var candleSeries = chart.addCandlestickSeries({{
                 upColor: '#26a69a', downColor: '#ef5350',
                 borderUpColor: '#26a69a', borderDownColor: '#ef5350',
                 wickUpColor: '#26a69a', wickDownColor: '#ef5350',
             }});
             candleSeries.setData({candle_json});
+
+            // EMA 9 overlay
+            var ema9 = chart.addLineSeries({{
+                color: '#ff9800', lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }});
+            ema9.setData({ema9_json});
+
+            // EMA 21 overlay
+            var ema21 = chart.addLineSeries({{
+                color: '#2196f3', lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }});
+            ema21.setData({ema21_json});
+
+            // Current price line
+            candleSeries.createPriceLine({{
+                price: {last_price}, color: '{price_color}',
+                lineWidth: 1, lineStyle: 0,
+                axisLabelVisible: true, title: '',
+            }});
 
             // Support/Resistance lines
             candleSeries.createPriceLine({{ price: {sr["r2"]}, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'R2' }});
@@ -664,22 +766,24 @@ with tab_chart:
             var markers = {markers_json};
             if (markers.length > 0) {{ candleSeries.setMarkers(markers); }}
 
-            // Volume
+            // Volume with gradient colors
             var volSeries = chart.addHistogramSeries({{
                 priceFormat: {{ type: 'volume' }},
-                priceScaleId: '',
+                priceScaleId: 'vol',
             }});
-            volSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.85, bottom: 0 }} }});
+            volSeries.priceScale().applyOptions({{
+                scaleMargins: {{ top: 0.82, bottom: 0 }},
+            }});
             volSeries.setData({vol_json});
 
             chart.timeScale().fitContent();
-            new ResizeObserver(function() {{ chart.applyOptions({{ width: container.clientWidth }}); }}).observe(container);
+            new ResizeObserver(function() {{
+                chart.applyOptions({{ width: container.clientWidth }});
+            }}).observe(container);
         }})();
         </script>
         """
-        components.html(chart_html, height=540, scrolling=False)
-
-        st.caption(f"📊 {selected_symbol} | {chart_period} / {chart_interval} | S/R lines on chart")
+        components.html(chart_html, height=570, scrolling=False)
     else:
         st.warning("Chart unavailable — market data not loaded. Will retry on next refresh.")
 
