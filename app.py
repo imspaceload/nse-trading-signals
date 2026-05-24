@@ -31,6 +31,7 @@ from trades import (
 from sms_sender import (
     send_sms_to_all, get_subscribers, add_subscriber,
     remove_subscriber, get_sms_log,
+    get_watchlist, add_to_watchlist, remove_from_watchlist,
 )
 from dhan_api import (
     get_option_chain_for_symbol, get_candles_for_symbol,
@@ -196,38 +197,63 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-    # ── Watchlist ──
-    st.markdown('<div style="color:#6b7280;font-size:0.7em;text-transform:uppercase;letter-spacing:1px;margin:16px 0 6px 0;font-weight:500;">WATCHLIST</div>', unsafe_allow_html=True)
-    WATCHLIST_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "RELIANCE", "HDFC BANK", "IDEA", "TCS"]
+    # ── Watchlist (saved to Supabase) ──
+    saved_watchlist = get_watchlist()
 
-    if is_market_open():
+    st.markdown(f"""
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 6px 0;">
+        <span style="color:#6b7280;font-size:0.7em;text-transform:uppercase;letter-spacing:1px;font-weight:500;">WATCHLIST</span>
+        <span style="color:#4b5563;font-size:0.65em;">{len(saved_watchlist)} saved</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Add to watchlist
+    wl_add_col, wl_btn_col = st.columns([3, 1])
+    with wl_add_col:
+        wl_add_sym = st.text_input("Add", placeholder="Add symbol...", key="wl_add", label_visibility="collapsed")
+    with wl_btn_col:
+        if st.button("➕", key="wl_add_btn", use_container_width=True):
+            if wl_add_sym.strip():
+                if add_to_watchlist(wl_add_sym):
+                    st.rerun()
+
+    # Fetch prices for watchlist symbols during market hours
+    if saved_watchlist and is_market_open():
         @st.cache_data(ttl=120)
-        def fetch_watchlist_prices():
+        def fetch_watchlist_prices(symbols_tuple):
             results = {}
             def _fetch(name):
                 try:
-                    return name, get_spot_price(SYMBOLS[name]["yf"])
+                    sym_info = SYMBOLS.get(name, _make_sym(name))
+                    return name, get_spot_price(sym_info["yf"])
                 except Exception:
                     return name, None
             with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-                for f in concurrent.futures.as_completed([ex.submit(_fetch, n) for n in WATCHLIST_SYMBOLS]):
+                for f in concurrent.futures.as_completed([ex.submit(_fetch, n) for n in symbols_tuple]):
                     n, p = f.result()
                     results[n] = p
             return results
-        wl_prices = fetch_watchlist_prices()
+        wl_prices = fetch_watchlist_prices(tuple(saved_watchlist))
     else:
         wl_prices = {}
 
-    wl_html = ""
-    for wl_name in WATCHLIST_SYMBOLS:
-        p = wl_prices.get(wl_name)
-        nse_s = SYMBOLS.get(wl_name, {}).get("nse", "")
-        display_name = nse_s if nse_s else wl_name
-        if p is not None:
-            wl_html += f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span><span style="color:#4caf50;font-size:0.82em;font-weight:600;">₹{p:,.2f}</span></div>'
-        else:
-            wl_html += f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span><span style="color:#616161;font-size:0.82em;">--</span></div>'
-    st.markdown(wl_html, unsafe_allow_html=True)
+    # Display watchlist items
+    if saved_watchlist:
+        for wl_name in saved_watchlist:
+            p = wl_prices.get(wl_name)
+            nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
+            display_name = nse_s if nse_s else wl_name
+            price_html = f'<span style="color:#4caf50;font-size:0.82em;font-weight:600;">₹{p:,.2f}</span>' if p else '<span style="color:#616161;font-size:0.82em;">--</span>'
+            st.markdown(f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span>{price_html}</div>', unsafe_allow_html=True)
+
+        # Remove from watchlist
+        with st.expander("🗑️ Remove from watchlist", expanded=False):
+            wl_remove = st.selectbox("Select", saved_watchlist, key="wl_remove", label_visibility="collapsed")
+            if st.button("Remove", key="wl_remove_btn", use_container_width=True):
+                if remove_from_watchlist(wl_remove):
+                    st.rerun()
+    else:
+        st.markdown('<div style="color:#4b5563;font-size:0.78em;padding:8px 0;">No symbols saved. Add above.</div>', unsafe_allow_html=True)
 
     # ── SMS status card ──
     subs = get_subscribers()

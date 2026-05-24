@@ -263,3 +263,74 @@ def get_sms_log() -> List[dict]:
         except Exception:
             return []
     return _load_json("sms_log.json")
+
+
+# ══════════════════════════════════════════
+#  WATCHLIST — persistent saved symbols
+# ══════════════════════════════════════════
+
+_WATCHLIST_FILE = "watchlist.json"
+
+def get_watchlist() -> List[str]:
+    """Get saved watchlist symbols."""
+    sb = _get_supabase()
+    if sb:
+        try:
+            resp = sb.table("watchlist").select("symbol").order("added_at", desc=False).execute()
+            return [r["symbol"] for r in resp.data] if resp.data else []
+        except Exception:
+            pass
+    return _load_json(_WATCHLIST_FILE)
+
+
+def add_to_watchlist(symbol: str) -> bool:
+    """Add a symbol to watchlist. Returns True on success."""
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return False
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            # Check if already exists
+            existing = sb.table("watchlist").select("symbol").eq("symbol", symbol).execute()
+            if existing.data:
+                return False  # already in watchlist
+            sb.table("watchlist").insert({
+                "symbol": symbol,
+                "added_at": datetime.now(IST).isoformat(),
+            }).execute()
+            return True
+        except Exception:
+            pass
+
+    # Fallback to JSON
+    wl = _load_json(_WATCHLIST_FILE)
+    if symbol in wl:
+        return False
+    wl.append(symbol)
+    _save_json(_WATCHLIST_FILE, wl)
+    return True
+
+
+def remove_from_watchlist(symbol: str) -> bool:
+    """Remove a symbol from watchlist. Returns True on success."""
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return False
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            sb.table("watchlist").delete().eq("symbol", symbol).execute()
+            return True
+        except Exception:
+            pass
+
+    # Fallback to JSON
+    wl = _load_json(_WATCHLIST_FILE)
+    if symbol in wl:
+        wl.remove(symbol)
+        _save_json(_WATCHLIST_FILE, wl)
+        return True
+    return False
