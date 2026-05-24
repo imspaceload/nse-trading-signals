@@ -192,11 +192,18 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Symbol search (only search, no dropdown) ──
+    # ── Symbol search ──
+    # If a watchlist item was clicked last run, pre-fill the search box
+    _wl_prefill = st.session_state.pop("_wl_selected", "")
+    if _wl_prefill:
+        st.session_state["custom_sym"] = _wl_prefill
+
     custom_sym = st.text_input("Search", placeholder="Type symbol... IDEA, RELIANCE", key="custom_sym", label_visibility="collapsed")
 
-    if custom_sym.strip():
-        custom_upper = custom_sym.strip().upper()
+    # Resolve symbol
+    _active_sym = custom_sym.strip() if custom_sym.strip() else ""
+    if _active_sym:
+        custom_upper = _active_sym.upper()
         match = [k for k in SYMBOLS if custom_upper == k.upper() or custom_upper == SYMBOLS[k].get("nse", "").upper()]
         if match:
             selected_symbol = match[0]
@@ -205,7 +212,6 @@ with st.sidebar:
             selected_symbol = custom_upper
             sym = _make_sym(custom_upper)
     else:
-        # No default — user must type a symbol
         selected_symbol = None
         sym = None
 
@@ -263,7 +269,7 @@ with st.sidebar:
         price_str = f"₹{p:,.2f}" if p else "--"
         btn_label = f"{display_name}  ·  {price_str}"
         if st.button(btn_label, key=f"wl_{wl_name}", use_container_width=True):
-            st.session_state["custom_sym"] = wl_name
+            st.session_state["_wl_selected"] = wl_name
             st.rerun()
 
     if not saved_watchlist:
