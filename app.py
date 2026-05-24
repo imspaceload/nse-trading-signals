@@ -169,7 +169,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # ── Symbol search (only search, no dropdown) ──
-    custom_sym = st.text_input("Search", placeholder="Type symbol... IDEA, RELIANCE, NIFTY", key="custom_sym", label_visibility="collapsed")
+    custom_sym = st.text_input("Search", placeholder="Type symbol... IDEA, RELIANCE", key="custom_sym", label_visibility="collapsed")
 
     if custom_sym.strip():
         custom_upper = custom_sym.strip().upper()
@@ -181,9 +181,9 @@ with st.sidebar:
             selected_symbol = custom_upper
             sym = _make_sym(custom_upper)
     else:
-        # Default to NIFTY 50 when nothing typed
-        selected_symbol = "NIFTY 50"
-        sym = SYMBOLS[selected_symbol]
+        # No default — user must type a symbol
+        selected_symbol = None
+        sym = None
 
     # ── Chart settings in a row ──
     c1, c2 = st.columns(2)
@@ -229,21 +229,42 @@ with st.sidebar:
             wl_html += f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span><span style="color:#616161;font-size:0.82em;">--</span></div>'
     st.markdown(wl_html, unsafe_allow_html=True)
 
-    # ── SMS status ──
+    # ── SMS status card ──
     subs = get_subscribers()
+    sms_active_color = "#4caf50" if len(subs) > 0 else "#616161"
     st.markdown(f"""
-    <div style="margin-top:16px;padding:10px;background:#12121f;border:1px solid #2a2a4a;border-radius:4px;">
-        <div style="color:#e8e8e8;font-size:0.8em;font-weight:600;">📱 Auto SMS</div>
-        <div style="color:#6b7280;font-size:0.72em;margin-top:4px;">{len(subs)} subscriber(s) · Scans every 60s</div>
+    <div style="margin-top:16px;padding:12px 14px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#e8e8e8;font-size:0.85em;font-weight:600;">📱 Auto SMS</span>
+            <span style="background:{sms_active_color};color:white;padding:1px 6px;border-radius:2px;font-size:0.6em;font-weight:600;">{"ACTIVE" if len(subs) > 0 else "NO SUBS"}</span>
+        </div>
+        <div style="color:#9ca3af;font-size:0.72em;margin-top:6px;">{len(subs)} subscriber(s) · Scans every 60s</div>
+        <div style="color:#6b7280;font-size:0.65em;margin-top:2px;">Signals auto-fire SMS alerts</div>
     </div>
     """, unsafe_allow_html=True)
 
     # Email settings (collapsed)
-    with st.expander("Email Alerts", expanded=False):
+    with st.expander("📧 Email Alerts", expanded=False):
         email_on = st.toggle("Send email on BUY/SELL", value=bool(EMAIL_SENDER and EMAIL_RECEIVER))
         sender = st.text_input("Sender Gmail", value=EMAIL_SENDER, type="default")
         app_pwd = st.text_input("App Password", value=EMAIL_PASSWORD, type="password")
         receiver = st.text_input("Client Email", value=EMAIL_RECEIVER)
+
+
+# ══════════════════════════════════════════
+#  EMPTY STATE — no symbol selected
+# ══════════════════════════════════════════
+
+if selected_symbol is None:
+    st.markdown("""
+    <div style="text-align:center;padding:80px 20px;">
+        <div style="font-size:3em;margin-bottom:16px;">⚡</div>
+        <div style="color:#e8e8e8;font-size:1.4em;font-weight:700;margin-bottom:8px;">Options Terminal</div>
+        <div style="color:#6b7280;font-size:0.95em;margin-bottom:24px;">Type a symbol in the sidebar to get started</div>
+        <div style="color:#4b5563;font-size:0.82em;">Examples: IDEA, RELIANCE, HDFCBANK, TCS, NIFTY</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
 
 
 # ══════════════════════════════════════════
@@ -686,22 +707,6 @@ with tab_chart:
                 })
         markers_json = json.dumps(markers)
 
-        # Compute EMA 9 and EMA 21 for overlay
-        ema9_data = []
-        ema21_data = []
-        if len(df) >= 9:
-            ema9 = df["Close"].ewm(span=9, adjust=False).mean()
-            for idx_e, val in ema9.items():
-                ts_e = int(idx_e.timestamp()) if hasattr(idx_e, 'timestamp') else 0
-                ema9_data.append({"time": ts_e, "value": round(float(val), 2)})
-        if len(df) >= 21:
-            ema21 = df["Close"].ewm(span=21, adjust=False).mean()
-            for idx_e, val in ema21.items():
-                ts_e = int(idx_e.timestamp()) if hasattr(idx_e, 'timestamp') else 0
-                ema21_data.append({"time": ts_e, "value": round(float(val), 2)})
-        ema9_json = json.dumps(ema9_data)
-        ema21_json = json.dumps(ema21_data)
-
         last_price = round(float(df["Close"].iloc[-1]), 2)
         day_chg_pct = round(float((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100), 2)
         price_color = "#26a69a" if day_chg_pct >= 0 else "#ef5350"
@@ -715,8 +720,6 @@ with tab_chart:
                     <span style="color:{price_color};font-size:0.85em;margin-left:6px;">({'+' if day_chg_pct >= 0 else ''}{day_chg_pct}%)</span>
                 </div>
                 <div style="display:flex;gap:16px;font-size:0.75em;">
-                    <span><span style="color:#ff9800;">━</span> EMA 9</span>
-                    <span><span style="color:#2196f3;">━</span> EMA 21</span>
                     <span><span style="color:#a5b4fc;">━</span> Pivot</span>
                     <span><span style="color:#34d399;">┅</span> R1/R2</span>
                     <span><span style="color:#f87171;">┅</span> S1/S2</span>
@@ -771,22 +774,6 @@ with tab_chart:
                 wickUpColor: '#26a69a', wickDownColor: '#ef5350',
             }});
             candleSeries.setData({candle_json});
-
-            // EMA 9 overlay
-            var ema9 = chart.addLineSeries({{
-                color: '#ff9800', lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            }});
-            ema9.setData({ema9_json});
-
-            // EMA 21 overlay
-            var ema21 = chart.addLineSeries({{
-                color: '#2196f3', lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            }});
-            ema21.setData({ema21_json});
 
             // Current price line
             candleSeries.createPriceLine({{
