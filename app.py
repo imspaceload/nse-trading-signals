@@ -200,24 +200,7 @@ with st.sidebar:
     # ── Watchlist (saved to Supabase) ──
     saved_watchlist = get_watchlist()
 
-    st.markdown(f"""
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 6px 0;">
-        <span style="color:#6b7280;font-size:0.7em;text-transform:uppercase;letter-spacing:1px;font-weight:500;">WATCHLIST</span>
-        <span style="color:#4b5563;font-size:0.65em;">{len(saved_watchlist)} saved</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Add to watchlist
-    wl_add_col, wl_btn_col = st.columns([3, 1])
-    with wl_add_col:
-        wl_add_sym = st.text_input("Add", placeholder="Add symbol...", key="wl_add", label_visibility="collapsed")
-    with wl_btn_col:
-        if st.button("➕", key="wl_add_btn", use_container_width=True):
-            if wl_add_sym.strip():
-                if add_to_watchlist(wl_add_sym):
-                    st.rerun()
-
-    # Fetch prices for watchlist symbols during market hours
+    # Fetch prices during market hours
     if saved_watchlist and is_market_open():
         @st.cache_data(ttl=120)
         def fetch_watchlist_prices(symbols_tuple):
@@ -237,23 +220,38 @@ with st.sidebar:
     else:
         wl_prices = {}
 
-    # Display watchlist items
-    if saved_watchlist:
-        for wl_name in saved_watchlist:
-            p = wl_prices.get(wl_name)
-            nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
-            display_name = nse_s if nse_s else wl_name
-            price_html = f'<span style="color:#4caf50;font-size:0.82em;font-weight:600;">₹{p:,.2f}</span>' if p else '<span style="color:#616161;font-size:0.82em;">--</span>'
-            st.markdown(f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span>{price_html}</div>', unsafe_allow_html=True)
+    # Build watchlist HTML — all in one clean block
+    wl_items_html = ""
+    for wl_name in saved_watchlist:
+        p = wl_prices.get(wl_name)
+        nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
+        display_name = nse_s if nse_s else wl_name
+        price_str = f'₹{p:,.2f}' if p else '--'
+        price_clr = '#4caf50' if p else '#616161'
+        wl_items_html += f'<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1a1a2e;"><span style="color:#e8e8e8;font-size:0.8em;">{display_name}</span><span style="color:{price_clr};font-size:0.8em;font-weight:600;">{price_str}</span></div>'
 
-        # Remove from watchlist
-        with st.expander("🗑️ Remove from watchlist", expanded=False):
-            wl_remove = st.selectbox("Select", saved_watchlist, key="wl_remove", label_visibility="collapsed")
-            if st.button("Remove", key="wl_remove_btn", use_container_width=True):
+    if not saved_watchlist:
+        wl_items_html = '<div style="color:#4b5563;font-size:0.75em;padding:6px 0;">No symbols yet</div>'
+
+    st.markdown(f"""
+    <div style="margin-top:14px;padding:10px 12px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;">
+        <div style="color:#6b7280;font-size:0.65em;text-transform:uppercase;letter-spacing:1px;font-weight:500;margin-bottom:6px;">WATCHLIST · {len(saved_watchlist)}</div>
+        {wl_items_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Add / Remove in one compact expander
+    with st.expander("✏️ Edit watchlist", expanded=False):
+        wl_add_sym = st.text_input("Add symbol", placeholder="e.g. IDEA, TCS", key="wl_add", label_visibility="collapsed")
+        if st.button("➕ Add", key="wl_add_btn", use_container_width=True):
+            if wl_add_sym.strip():
+                if add_to_watchlist(wl_add_sym):
+                    st.rerun()
+        if saved_watchlist:
+            wl_remove = st.selectbox("Remove", saved_watchlist, key="wl_remove", label_visibility="collapsed")
+            if st.button("🗑️ Remove", key="wl_remove_btn", use_container_width=True):
                 if remove_from_watchlist(wl_remove):
                     st.rerun()
-    else:
-        st.markdown('<div style="color:#4b5563;font-size:0.78em;padding:8px 0;">No symbols saved. Add above.</div>', unsafe_allow_html=True)
 
     # ── SMS status card ──
     subs = get_subscribers()
