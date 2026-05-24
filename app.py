@@ -593,23 +593,26 @@ with tab_signals:
             elif action in ("BUY", "SELL"):
                 opt_type = "CE" if action == "BUY" else "PE"
                 atm_s = _atm_strike(spot_price)
+                avg_spot = round(spot_price * 0.7, 2)
                 chat_text = f'{"🟢" if action=="BUY" else "🔴"} <b>{action} {selected_symbol} {atm_s}{opt_type}</b>'
                 chat_text += f'<br>💰 Entry: <b>₹{spot_price:,.2f}</b>'
                 chat_text += f'<br>🎯 Target: <b>₹{signal["target"]:,.2f}</b>' if signal.get("target") else ''
+                chat_text += f'<br>📉 Avg: <b>₹{avg_spot:,.2f}</b>'
                 chat_text += f'<br>📱 SMS sent automatically'
             else:
                 chat_text = f'🟡 <b>HOLD — {selected_symbol}</b><br>⏸️ No clear signal. Scanning...'
                 chat_text += f'<br>💡 {signal["buy_count"]} BUY / {signal["sell_count"]} SELL indicators'
             chat_html += f'<div class="chat-msg {chat_css}">{chat_text}<div class="chat-time">{now_str} ✓✓</div></div>'
 
-            # Historical signals — show with option format
-            for s in reversed(all_signals[-5:]):
+            # Historical signals — show only last 2
+            for s in reversed(all_signals[-2:]):
                 ts = s["index"].strftime("%I:%M %p, %d %b") if hasattr(s["index"], "strftime") else str(s["index"])
                 s_css = "chat-buy" if s["action"] == "BUY" else "chat-sell"
                 opt_type = "CE" if s["action"] == "BUY" else "PE"
                 s_icon = "🟢" if s["action"] == "BUY" else "🔴"
                 atm = _atm_strike(s["price"])
-                chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol} {atm}{opt_type}</b><br>💰 @ ₹{s["price"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f}<div class="chat-time">{ts}</div></div>'
+                s_avg = round(s["price"] * 0.7, 2)
+                chat_html += f'<div class="chat-msg {s_css}">{s_icon} <b>{s["action"]} {selected_symbol} {atm}{opt_type}</b><br>💰 Entry: ₹{s["price"]:,.2f} &nbsp; 🎯 T: ₹{s["target"]:,.2f} &nbsp; 📉 Avg: ₹{s_avg:,.2f}<div class="chat-time">{ts}</div></div>'
             chat_html += '</div>'
             st.markdown(chat_html, unsafe_allow_html=True)
 
