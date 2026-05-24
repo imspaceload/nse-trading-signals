@@ -220,59 +220,54 @@ with st.sidebar:
     else:
         wl_prices = {}
 
-    # Build watchlist HTML — all in one clean block
-    wl_items_html = ""
+    # Pure HTML watchlist + SMS status — zero Streamlit widgets, zero clutter
+    wl_rows = ""
     for wl_name in saved_watchlist:
         p = wl_prices.get(wl_name)
         nse_s = SYMBOLS.get(wl_name, {}).get("nse", wl_name)
         display_name = nse_s if nse_s else wl_name
         price_str = f'₹{p:,.2f}' if p else '--'
-        price_clr = '#4caf50' if p else '#616161'
-        wl_items_html += f'<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1a1a2e;"><span style="color:#e8e8e8;font-size:0.8em;">{display_name}</span><span style="color:{price_clr};font-size:0.8em;font-weight:600;">{price_str}</span></div>'
+        price_clr = '#4caf50' if p else '#4b5563'
+        wl_rows += f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#d1d5db;font-size:0.8em;">{display_name}</span><span style="color:{price_clr};font-size:0.8em;font-weight:600;">{price_str}</span></div>'
 
     if not saved_watchlist:
-        wl_items_html = '<div style="color:#4b5563;font-size:0.75em;padding:6px 0;">No symbols yet</div>'
+        wl_rows = '<div style="color:#4b5563;font-size:0.75em;padding:4px 0;">Type below to add</div>'
 
-    st.markdown(f"""
-    <div style="margin-top:14px;padding:10px 12px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;">
-        <div style="color:#6b7280;font-size:0.65em;text-transform:uppercase;letter-spacing:1px;font-weight:500;margin-bottom:6px;">WATCHLIST · {len(saved_watchlist)}</div>
-        {wl_items_html}
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Add / Remove in one compact expander
-    with st.expander("✏️ Edit watchlist", expanded=False):
-        wl_add_sym = st.text_input("Add symbol", placeholder="e.g. IDEA, TCS", key="wl_add", label_visibility="collapsed")
-        if st.button("➕ Add", key="wl_add_btn", use_container_width=True):
-            if wl_add_sym.strip():
-                if add_to_watchlist(wl_add_sym):
-                    st.rerun()
-        if saved_watchlist:
-            wl_remove = st.selectbox("Remove", saved_watchlist, key="wl_remove", label_visibility="collapsed")
-            if st.button("🗑️ Remove", key="wl_remove_btn", use_container_width=True):
-                if remove_from_watchlist(wl_remove):
-                    st.rerun()
-
-    # ── SMS status card ──
     subs = get_subscribers()
-    sms_active_color = "#4caf50" if len(subs) > 0 else "#616161"
+    sms_clr = "#4caf50" if len(subs) > 0 else "#616161"
+    sms_label = "ACTIVE" if len(subs) > 0 else "NO SUBS"
+
     st.markdown(f"""
-    <div style="margin-top:16px;padding:12px 14px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:#e8e8e8;font-size:0.85em;font-weight:600;">📱 Auto SMS</span>
-            <span style="background:{sms_active_color};color:white;padding:1px 6px;border-radius:2px;font-size:0.6em;font-weight:600;">{"ACTIVE" if len(subs) > 0 else "NO SUBS"}</span>
+    <div style="margin-top:14px;background:#12121f;border:1px solid #2a2a4a;border-radius:6px;overflow:hidden;">
+        <div style="padding:8px 12px;border-bottom:1px solid #1a1a2e;">
+            <span style="color:#6b7280;font-size:0.65em;text-transform:uppercase;letter-spacing:1px;">Watchlist · {len(saved_watchlist)}</span>
         </div>
-        <div style="color:#9ca3af;font-size:0.72em;margin-top:6px;">{len(subs)} subscriber(s) · Scans every 60s</div>
-        <div style="color:#6b7280;font-size:0.65em;margin-top:2px;">Signals auto-fire SMS alerts</div>
+        <div style="padding:4px 12px 8px 12px;">{wl_rows}</div>
+        <div style="padding:8px 12px;border-top:1px solid #1a1a2e;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#9ca3af;font-size:0.72em;">📱 SMS · {len(subs)} sub(s)</span>
+            <span style="background:{sms_clr};color:white;padding:1px 6px;border-radius:2px;font-size:0.58em;font-weight:600;">{sms_label}</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Email settings (collapsed)
-    with st.expander("📧 Email Alerts", expanded=False):
-        email_on = st.toggle("Send email on BUY/SELL", value=bool(EMAIL_SENDER and EMAIL_RECEIVER))
-        sender = st.text_input("Sender Gmail", value=EMAIL_SENDER, type="default")
-        app_pwd = st.text_input("App Password", value=EMAIL_PASSWORD, type="password")
-        receiver = st.text_input("Client Email", value=EMAIL_RECEIVER)
+    # Single input for watchlist management — type to add, or "- SYMBOL" to remove
+    wl_input = st.text_input("Watchlist", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
+    if wl_input.strip():
+        inp = wl_input.strip()
+        if inp.startswith("-"):
+            sym_to_remove = inp.lstrip("- ").upper()
+            if remove_from_watchlist(sym_to_remove):
+                st.rerun()
+        else:
+            sym_to_add = inp.lstrip("+ ").upper()
+            if add_to_watchlist(sym_to_add):
+                st.rerun()
+
+    # Email config — hidden, no UI widget, just use env vars
+    email_on = bool(EMAIL_SENDER and EMAIL_RECEIVER)
+    sender = EMAIL_SENDER
+    app_pwd = EMAIL_PASSWORD
+    receiver = EMAIL_RECEIVER
 
 
 # ══════════════════════════════════════════
