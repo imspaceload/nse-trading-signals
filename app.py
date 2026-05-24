@@ -40,79 +40,91 @@ from dhan_api import (
 
 IST = pytz.timezone("Asia/Kolkata")
 
-st.set_page_config(page_title="NSE Trading Signals", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Options Terminal", page_icon="⚡", layout="wide")
 
 # Auto-refresh: 60s during market hours, 5 min when closed
 _refresh_ms = 60_000 if is_market_open() else 300_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
-# ── Honest UX disclaimer ──
-st.info("📢 Signals fire only while this browser tab is open. For 24/7 alerts, contact developer for upgrade.")
-
-# ── Custom CSS ──
+# ── Kite-style CSS ──
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; max-width: 100%; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    .trade-card { padding: 16px; border-radius: 12px; margin: 8px 0; }
-    .trade-open { background: linear-gradient(135deg, #064e3b, #065f46); border: 1px solid #10b981; }
-    .trade-closed-profit { background: linear-gradient(135deg, #064e3b, #065f46); border: 1px solid #22c55e; }
-    .trade-closed-loss { background: linear-gradient(135deg, #7f1d1d, #991b1b); border: 1px solid #ef4444; }
-    .trade-card h3 { margin: 0 0 6px 0; color: white; font-size: 1.15em; }
-    .trade-card .detail { color: #d1d5db; font-size: 0.92em; margin: 3px 0; }
-    .trade-card .detail b { color: #fbbf24; }
-    .trade-card .pnl { font-size: 1.1em; font-weight: 700; margin-top: 6px; }
+    * { font-family: 'Inter', -apple-system, sans-serif !important; }
+    .block-container { padding-top: 0.5rem; max-width: 100%; padding-left: 1rem; padding-right: 1rem; }
 
-    .action-panel { padding: 20px; border-radius: 14px; margin: 10px 0; }
-    .action-buy { background: linear-gradient(135deg, #064e3b, #065f46); border: 2px solid #10b981; }
-    .action-sell { background: linear-gradient(135deg, #7f1d1d, #991b1b); border: 2px solid #ef4444; }
-    .action-hold { background: linear-gradient(135deg, #78350f, #92400e); border: 2px solid #f59e0b; }
-    .action-panel h2 { margin: 0 0 8px 0; color: white; font-size: 1.6em; }
-    .action-panel .step { color: #e5e7eb; font-size: 1em; margin: 6px 0; padding: 8px 12px; background: rgba(0,0,0,0.2); border-radius: 8px; }
-    .action-panel .step b { color: #fbbf24; }
+    /* Sidebar - Kite dark */
+    div[data-testid="stSidebar"] { background: #1b1b2f; border-right: 1px solid #2a2a4a; }
+    div[data-testid="stSidebar"] .stTextInput input { background: #12121f; border: 1px solid #2a2a4a; color: #e8e8e8; border-radius: 4px; font-size: 13px; }
+    div[data-testid="stSidebar"] .stSelectbox > div > div { background: #12121f; border: 1px solid #2a2a4a; border-radius: 4px; }
 
-    .option-card { background: #1a1a2e; padding: 16px; border-radius: 12px; border: 1px solid #6366f1; margin: 8px 0; }
-    .option-card h3 { margin: 0 0 10px 0; color: #a5b4fc; font-size: 1.1em; }
-    .option-card .contract { font-size: 1.4em; font-weight: 800; color: #22d3ee; margin: 6px 0; }
-    .option-card .detail { color: #cbd5e1; font-size: 0.9em; margin: 3px 0; }
+    /* Action panels - clean Kite style */
+    .action-panel { padding: 16px 20px; border-radius: 4px; margin: 8px 0; }
+    .action-buy { background: #e8f5e9; border-left: 4px solid #4caf50; }
+    .action-buy h2, .action-buy .step { color: #1b5e20 !important; }
+    .action-buy .step b { color: #2e7d32 !important; }
+    .action-sell { background: #ffebee; border-left: 4px solid #f44336; }
+    .action-sell h2, .action-sell .step { color: #b71c1c !important; }
+    .action-sell .step b { color: #c62828 !important; }
+    .action-hold { background: #1e1e2e; border-left: 4px solid #ff9800; }
+    .action-panel h2 { margin: 0 0 8px 0; font-size: 1.3em; font-weight: 600; }
+    .action-panel .step { font-size: 0.9em; margin: 4px 0; padding: 6px 10px; background: rgba(0,0,0,0.05); border-radius: 4px; }
 
-    .chat-container { max-height: 500px; overflow-y: auto; padding: 10px; }
-    .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 12px; margin: 8px 0; font-size: 0.9em; line-height: 1.6; }
-    .chat-buy { background: #065f46; color: #d1fae5; border-bottom-left-radius: 4px; }
-    .chat-sell { background: #991b1b; color: #fee2e2; border-bottom-left-radius: 4px; }
-    .chat-hold { background: #92400e; color: #fef3c7; border-bottom-left-radius: 4px; }
-    .chat-time { font-size: 0.7em; color: rgba(255,255,255,0.5); text-align: right; margin-top: 4px; }
+    /* Option card - clean */
+    .option-card { background: #12121f; padding: 14px 16px; border-radius: 4px; border: 1px solid #2a2a4a; margin: 8px 0; }
+    .option-card h3 { margin: 0 0 8px 0; color: #9ca3af; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+    .option-card .contract { font-size: 1.2em; font-weight: 700; color: #e8e8e8; margin: 4px 0; }
+    .option-card .detail { color: #9ca3af; font-size: 0.85em; margin: 2px 0; }
 
-    .indicator-card { background: #1e1e2e; padding: 14px; border-radius: 10px; border: 1px solid #30363d; margin: 4px 0; text-align: center; }
-    .indicator-card h4 { margin: 0 0 6px 0; color: #94a3b8; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }
-    .indicator-card .value { font-size: 1.5em; font-weight: bold; color: white; }
-    .badge { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 0.7em; font-weight: 700; color: white; margin-top: 6px; }
-    .badge-buy { background: #059669; }
-    .badge-sell { background: #dc2626; }
-    .badge-neutral { background: #6b7280; }
-    .news-item { background: #1e1e2e; padding: 10px 14px; border-radius: 8px; margin: 6px 0; border-left: 4px solid #6b7280; }
-    .news-item.bullish { border-left-color: #22c55e; }
-    .news-item.bearish { border-left-color: #ef4444; }
-    .analysis-box { background: linear-gradient(135deg, #1e1e2e, #252547); padding: 16px; border-radius: 10px; border: 1px solid #6366f1; }
-    div[data-testid="stSidebar"] { background: #0f0f1a; }
-    .signal-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-    .signal-table th { background: #1e293b; color: #94a3b8; padding: 8px 12px; text-align: left; }
-    .signal-table td { padding: 8px 12px; border-bottom: 1px solid #1e293b; color: #e5e7eb; }
+    /* Signal feed - compact cards */
+    .chat-container { max-height: 450px; overflow-y: auto; padding: 4px; }
+    .chat-msg { padding: 10px 12px; border-radius: 4px; margin: 4px 0; font-size: 0.82em; line-height: 1.5; border-left: 3px solid; }
+    .chat-buy { background: #12261e; color: #a5d6a7; border-left-color: #4caf50; }
+    .chat-sell { background: #2a1215; color: #ef9a9a; border-left-color: #f44336; }
+    .chat-hold { background: #1e1e2e; color: #ffe0b2; border-left-color: #ff9800; }
+    .chat-time { font-size: 0.7em; color: rgba(255,255,255,0.35); text-align: right; margin-top: 3px; }
 
-    .sms-log-table { width: 100%; border-collapse: collapse; font-size: 0.82em; margin-top: 8px; }
-    .sms-log-table th { background: #1e293b; color: #94a3b8; padding: 6px 10px; text-align: left; }
-    .sms-log-table td { padding: 6px 10px; border-bottom: 1px solid #1e293b; color: #e5e7eb; }
+    /* Indicator cards - Kite minimal */
+    .indicator-card { background: #12121f; padding: 12px; border-radius: 4px; border: 1px solid #2a2a4a; margin: 3px 0; text-align: center; }
+    .indicator-card h4 { margin: 0 0 4px 0; color: #6b7280; font-size: 0.7em; text-transform: uppercase; letter-spacing: 1px; font-weight: 500; }
+    .indicator-card .value { font-size: 1.3em; font-weight: 600; color: #e8e8e8; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 2px; font-size: 0.65em; font-weight: 600; color: white; margin-top: 4px; }
+    .badge-buy { background: #4caf50; }
+    .badge-sell { background: #f44336; }
+    .badge-neutral { background: #616161; }
 
-    .sub-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-    .sub-table th { background: #1e293b; color: #94a3b8; padding: 6px 10px; text-align: left; }
-    .sub-table td { padding: 6px 10px; border-bottom: 1px solid #1e293b; color: #e5e7eb; }
+    /* Tables - clean */
+    .signal-table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+    .signal-table th { background: #12121f; color: #6b7280; padding: 8px 10px; text-align: left; font-weight: 500; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.5px; border-bottom: 1px solid #2a2a4a; }
+    .signal-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a2e; color: #d1d5db; }
+
+    .sms-log-table, .sub-table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+    .sms-log-table th, .sub-table th { background: #12121f; color: #6b7280; padding: 6px 10px; text-align: left; font-weight: 500; border-bottom: 1px solid #2a2a4a; }
+    .sms-log-table td, .sub-table td { padding: 6px 10px; border-bottom: 1px solid #1a1a2e; color: #d1d5db; }
+
+    /* News */
+    .news-item { background: #12121f; padding: 10px 14px; border-radius: 4px; margin: 4px 0; border-left: 3px solid #616161; }
+    .news-item.bullish { border-left-color: #4caf50; }
+    .news-item.bearish { border-left-color: #f44336; }
+    .analysis-box { background: #12121f; padding: 14px; border-radius: 4px; border: 1px solid #2a2a4a; }
+
+    /* Auto SMS banner */
+    .auto-sms-banner { background: #12121f; border: 1px solid #2a2a4a; border-radius: 4px; padding: 10px 14px; margin: 6px 0; }
+    .auto-sms-banner .title { color: #e8e8e8; font-weight: 600; font-size: 0.88em; }
+    .auto-sms-banner .info { color: #6b7280; font-size: 0.78em; margin-top: 3px; }
 
     .alert-banner { animation: pulse 2s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
 
-    .auto-sms-banner { background: linear-gradient(135deg, #1e1e2e, #252547); border: 1px solid #6366f1; border-radius: 10px; padding: 12px 16px; margin: 8px 0; }
-    .auto-sms-banner .title { color: #a5b4fc; font-weight: 700; font-size: 0.95em; }
-    .auto-sms-banner .info { color: #94a3b8; font-size: 0.82em; margin-top: 4px; }
+    /* Hide Streamlit branding */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header[data-testid="stHeader"] { background: #0e0e1a; border-bottom: 1px solid #2a2a4a; }
+
+    /* Watchlist item hover */
+    .wl-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a2e; cursor: pointer; transition: background 0.15s; }
+    .wl-item:hover { background: rgba(99,102,241,0.08); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,47 +154,51 @@ def _atm_strike(price: float) -> int:
     return int(round(price / step) * step)
 
 with st.sidebar:
-    st.markdown("## ⚙️ Settings")
+    # ── Kite-style header ──
+    now = datetime.now(IST)
+    mkt_status = "LIVE" if is_market_open() else "CLOSED"
+    mkt_color = "#4caf50" if is_market_open() else "#f44336"
+    st.markdown(f"""
+    <div style="padding:8px 0 12px 0;border-bottom:1px solid #2a2a4a;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#e8e8e8;font-size:1.1em;font-weight:700;">⚡ Options Terminal</span>
+            <span style="background:{mkt_color};color:white;padding:2px 8px;border-radius:2px;font-size:0.65em;font-weight:600;">{mkt_status}</span>
+        </div>
+        <div style="color:#6b7280;font-size:0.75em;margin-top:4px;">{now.strftime("%d %b %Y, %I:%M %p IST")}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Type any symbol first (takes priority), or pick from favorites
-    custom_sym = st.text_input("🔍 Search Any Stock", placeholder="e.g. IDEA, BAJFINANCE, IRFC...", key="custom_sym")
+    # ── Symbol search (only search, no dropdown) ──
+    custom_sym = st.text_input("Search", placeholder="Type symbol... IDEA, RELIANCE, NIFTY", key="custom_sym", label_visibility="collapsed")
 
     if custom_sym.strip():
         custom_upper = custom_sym.strip().upper()
-        # Check if it's in our favorites first
         match = [k for k in SYMBOLS if custom_upper == k.upper() or custom_upper == SYMBOLS[k].get("nse", "").upper()]
         if match:
             selected_symbol = match[0]
             sym = SYMBOLS[selected_symbol]
         else:
-            # Auto-construct for any NSE symbol
             selected_symbol = custom_upper
             sym = _make_sym(custom_upper)
-        st.markdown(f'<p style="color:#22c55e;font-size:0.85em;font-weight:600;">✅ Active: {selected_symbol}</p>', unsafe_allow_html=True)
     else:
-        all_symbols = list(SYMBOLS.keys())
-        selected_symbol = st.selectbox("⭐ Quick Select", all_symbols, index=0, key="quick_sym")
+        # Default to NIFTY 50 when nothing typed
+        selected_symbol = "NIFTY 50"
         sym = SYMBOLS[selected_symbol]
 
-    chart_period = st.selectbox("Chart Period", ["1d", "5d", "1mo"], index=1)
-    chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"], index=1)
+    # ── Chart settings in a row ──
+    c1, c2 = st.columns(2)
+    with c1:
+        chart_period = st.selectbox("Period", ["1d", "5d", "1mo"], index=1, label_visibility="collapsed")
+    with c2:
+        chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"], index=1, label_visibility="collapsed")
 
-    if st.button("🔄 Refresh Now", use_container_width=True, type="primary"):
+    if st.button("↻ Refresh", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
 
-    st.divider()
-    now = datetime.now(IST)
-    if is_market_open():
-        st.success("🟢 Market Open — Auto SMS Active")
-    else:
-        st.warning("🔴 Market Closed")
-    st.caption(now.strftime("%d %b %Y, %I:%M %p IST"))
-
-    # ── Watchlist (loads only during market hours, cached 2 min) ──
-    st.divider()
-    st.markdown("##### 👀 Watchlist")
-    WATCHLIST_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "SENSEX", "RELIANCE", "HDFC BANK", "TCS"]
+    # ── Watchlist ──
+    st.markdown('<div style="color:#6b7280;font-size:0.7em;text-transform:uppercase;letter-spacing:1px;margin:16px 0 6px 0;font-weight:500;">WATCHLIST</div>', unsafe_allow_html=True)
+    WATCHLIST_SYMBOLS = ["NIFTY 50", "BANK NIFTY", "RELIANCE", "HDFC BANK", "IDEA", "TCS"]
 
     if is_market_open():
         @st.cache_data(ttl=120)
@@ -205,26 +221,29 @@ with st.sidebar:
     wl_html = ""
     for wl_name in WATCHLIST_SYMBOLS:
         p = wl_prices.get(wl_name)
+        nse_s = SYMBOLS.get(wl_name, {}).get("nse", "")
+        display_name = nse_s if nse_s else wl_name
         if p is not None:
-            wl_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#e5e7eb;font-size:0.85em;">{wl_name}</span><span style="color:#22c55e;font-size:0.85em;font-weight:600;">₹{p:,.2f}</span></div>'
+            wl_html += f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span><span style="color:#4caf50;font-size:0.82em;font-weight:600;">₹{p:,.2f}</span></div>'
         else:
-            wl_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#e5e7eb;font-size:0.85em;">{wl_name}</span><span style="color:#6b7280;font-size:0.85em;">--</span></div>'
-    st.markdown(f'<div style="background:#0f0f1a;border-radius:8px;padding:8px 10px;">{wl_html}</div>', unsafe_allow_html=True)
+            wl_html += f'<div class="wl-item"><span style="color:#e8e8e8;font-size:0.82em;font-weight:500;">{display_name}</span><span style="color:#616161;font-size:0.82em;">--</span></div>'
+    st.markdown(wl_html, unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown("##### 📧 Email Alerts")
-    email_on = st.toggle("Send email on BUY/SELL", value=bool(EMAIL_SENDER and EMAIL_RECEIVER))
-    sender = st.text_input("Sender Gmail", value=EMAIL_SENDER, type="default")
-    app_pwd = st.text_input("App Password", value=EMAIL_PASSWORD, type="password")
-    receiver = st.text_input("Client Email", value=EMAIL_RECEIVER)
-
-    st.divider()
+    # ── SMS status ──
     subs = get_subscribers()
-    st.markdown(f"##### 📱 SMS: {len(subs)} subscriber(s)")
-    st.caption("🤖 Auto-detects BUY/SELL signals")
-    st.caption("📱 Sends SMS with option details")
-    st.caption("⏱️ Scans every 60s during market hours")
-    st.caption(f"🛑 SL: {STOP_LOSS_PCT}% | Target: {TARGET_PCT}%")
+    st.markdown(f"""
+    <div style="margin-top:16px;padding:10px;background:#12121f;border:1px solid #2a2a4a;border-radius:4px;">
+        <div style="color:#e8e8e8;font-size:0.8em;font-weight:600;">📱 Auto SMS</div>
+        <div style="color:#6b7280;font-size:0.72em;margin-top:4px;">{len(subs)} subscriber(s) · Scans every 60s</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Email settings (collapsed)
+    with st.expander("Email Alerts", expanded=False):
+        email_on = st.toggle("Send email on BUY/SELL", value=bool(EMAIL_SENDER and EMAIL_RECEIVER))
+        sender = st.text_input("Sender Gmail", value=EMAIL_SENDER, type="default")
+        app_pwd = st.text_input("App Password", value=EMAIL_PASSWORD, type="password")
+        receiver = st.text_input("Client Email", value=EMAIL_RECEIVER)
 
 
 # ══════════════════════════════════════════
@@ -417,24 +436,45 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
             if closed:
                 send_sms_to_all(closed, action="EXIT")
 
-    # ── HEADER ──
+    # ── KITE-STYLE HEADER ──
     day_change = df["Close"].iloc[-1] - df["Open"].iloc[0]
     day_pct = (day_change / df["Open"].iloc[0]) * 100
-    color = "#22c55e" if day_change >= 0 else "#ef4444"
+    chg_color = "#4caf50" if day_change >= 0 else "#f44336"
     arrow = "▲" if day_change >= 0 else "▼"
+    atm_s = _atm_strike(spot_price)
+    opt_t = "CE" if signal.get("buy_count", 0) >= signal.get("sell_count", 0) else "PE"
 
-    st.markdown(f"## {selected_symbol} — ₹{spot_price:,.2f}")
-    st.markdown(f'<span style="color:{color};font-size:1.1em;font-weight:600;">{arrow} ₹{abs(day_change):,.2f} ({day_pct:+.2f}%)</span> &nbsp; <span style="color:#6b7280;">H: ₹{df["High"].max():,.2f} &nbsp; L: ₹{df["Low"].min():,.2f}</span>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;padding:4px 0 10px 0;border-bottom:1px solid #2a2a4a;margin-bottom:10px;">
+        <div>
+            <span style="color:#e8e8e8;font-size:1.6em;font-weight:700;">{selected_symbol}</span>
+            <span style="color:#6b7280;font-size:0.85em;margin-left:8px;">NSE</span>
+            <div style="margin-top:2px;">
+                <span style="color:#e8e8e8;font-size:1.3em;font-weight:600;">₹{spot_price:,.2f}</span>
+                <span style="color:{chg_color};font-size:0.9em;font-weight:500;margin-left:10px;">{arrow} {abs(day_change):,.2f} ({day_pct:+.2f}%)</span>
+            </div>
+        </div>
+        <div style="text-align:right;">
+            <div style="color:#6b7280;font-size:0.72em;text-transform:uppercase;">ATM Option</div>
+            <div style="color:#e8e8e8;font-size:1.1em;font-weight:600;">{atm_s} {opt_t}</div>
+            <div style="display:flex;gap:16px;margin-top:2px;">
+                <span style="color:#6b7280;font-size:0.78em;">O: ₹{df['Open'].iloc[0]:,.2f}</span>
+                <span style="color:#6b7280;font-size:0.78em;">H: ₹{df['High'].max():,.2f}</span>
+                <span style="color:#6b7280;font-size:0.78em;">L: ₹{df['Low'].min():,.2f}</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     if sms_sent_this_run:
-        st.success(f"🚀 AUTO SIGNAL FIRED: {action} {selected_symbol} — SMS sent to {sms_sent_count} subscriber(s)" + (f", {sms_fail_count} failed" if sms_fail_count else ""))
+        st.success(f"Signal fired: {action} {selected_symbol} — SMS sent to {sms_sent_count}")
     elif action in ("BUY", "SELL") and not cooldown_ok:
         remaining = 900 - int((datetime.now(IST) - last_signal_time).total_seconds())
-        st.warning(f"⏳ Signal: {action} — cooldown active ({remaining // 60}m {remaining % 60}s left). Prevents whipsaw trades.")
+        st.caption(f"⏳ {action} signal on cooldown ({remaining // 60}m {remaining % 60}s)")
     elif action in ("BUY", "SELL"):
-        st.info(f"📱 Last signal: {action} — already sent (waiting for new signal)")
+        st.caption(f"📱 {action} signal sent — waiting for next")
     else:
-        st.markdown(f'<div class="auto-sms-banner"><div class="title">🤖 Auto-pilot active — scanning every 60s</div><div class="info">When BUY/SELL signal fires → auto picks option → auto sends SMS to {len(subs)} subscriber(s)</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="auto-sms-banner"><div class="title">Scanning · {len(subs)} subscriber(s)</div><div class="info">Auto-detects signals → picks option → sends SMS</div></div>', unsafe_allow_html=True)
 
 else:
     # Data fetch failed — show warning but DON'T stop the app
