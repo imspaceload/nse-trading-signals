@@ -26,11 +26,16 @@ from claude_analyzer import analyze_market
 from notifier import format_signal_chat, send_signal_email
 from trades import (
     create_trade, close_trade, get_open_trades, get_closed_trades,
-    format_trade_display, delete_trade,
+    delete_trade,
 )
 from sms_sender import (
     send_sms_to_all, get_subscribers, add_subscriber,
     remove_subscriber, get_sms_log,
+)
+from dhan_api import (
+    get_option_chain_for_symbol, get_candles_for_symbol,
+    get_spot_price_dhan, resolve_symbol, get_expiry_list,
+    get_option_chain_dhan,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -416,23 +421,23 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
 
 else:
     # Data fetch failed — show warning but DON'T stop the app
-    st.warning(f"⚠️ Could not fetch market data for {selected_symbol}. Will retry on next auto-refresh (60s). Trades & SMS Admin still work below.")
+    st.warning(f"⚠️ Could not fetch market data for {selected_symbol}. Will retry on next auto-refresh (60s). SMS Admin still works below.")
     action = "HOLD"
 
 
 # ══════════════════════════════════════════
-#  TABS: Signals & Chart | Trades | News & AI | SMS Admin
+#  TABS: Signals | Chart | Option Chain | News & AI | SMS Admin
 # ══════════════════════════════════════════
 
-tab_signals, tab_chart, tab_optchain, tab_trades, tab_portfolio, tab_news, tab_sms = st.tabs([
-    "📊 Signals", "📈 Chart", "🔗 Option Chain", "📋 Trades", "💰 Portfolio", "📰 News & AI", "📱 SMS Admin"
+tab_signals, tab_chart, tab_optchain, tab_news, tab_sms = st.tabs([
+    "📊 Signals", "📈 Chart", "🔗 Option Chain", "📰 News & AI", "📱 SMS Admin"
 ])
 
 
 # ── TAB 1: SIGNALS (no chart here anymore) ──
 with tab_signals:
     if not data_ok:
-        st.error(f"⚠️ Market data unavailable for {selected_symbol}. Auto-retrying every 60s. Check Trades & SMS Admin tabs — they still work.")
+        st.error(f"⚠️ Market data unavailable for {selected_symbol}. Auto-retrying every 60s. SMS Admin tab still works.")
     else:
         action_col, chat_col = st.columns([3, 2])
 
@@ -543,27 +548,13 @@ with tab_signals:
             st.markdown(f'<table class="signal-table"><thead><tr><th>Time</th><th>Signal</th><th>Option</th><th>Entry</th><th>SL</th><th>Target</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
-# ── TAB 2: CHART (TradingView Widget) ──
+# ── TAB 2: CHART (Candlestick with Support/Resistance) ──
 with tab_chart:
-    tv_symbol = sym.get("tv", "NSE:NIFTY")
-    # URL-encode the symbol (NSE:NIFTY -> NSE%3ANIFTY)
-    import urllib.parse
-    tv_encoded = urllib.parse.quote(tv_symbol, safe='')
-    tv_widget_html = f"""
-    <iframe
-      src="https://s.tradingview.com/widgetembed/?frameElementId=tv_chart_embed&symbol={tv_encoded}&interval=5&symboledit=1&saveimage=1&toolbarbg=0e1117&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&studies=RSI%40tv-basicstudies&studies=MACD%40tv-basicstudies&locale=en"
-      style="width:100%;height:600px;border:none;"
-      allowtransparency="true"
-      frameborder="0"
-      allowfullscreen>
-    </iframe>
-    """
-    components.html(tv_widget_html, height=620, scrolling=False)
-
-    if data_ok:
+    if data_ok and not df.empty:
         sr = compute_support_resistance(df)
-        # Show as colored cards in a row
-        sr_html = '<div style="display:flex;gap:8px;margin-top:12px;justify-content:center;">'
+
+        # Support/Resistance cards at top
+        sr_html = '<div style="display:flex;gap:8px;margin-bottom:12px;justify-content:center;">'
         sr_html += f'<div style="background:#7f1d1d;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">S2</span><br><span style="color:#ef4444;font-weight:700;">₹{sr["s2"]:,.2f}</span></div>'
         sr_html += f'<div style="background:#991b1b;padding:8px 16px;border-radius:8px;text-align:center;"><span style="color:#94a3b8;font-size:0.7em;">S1</span><br><span style="color:#f87171;font-weight:700;">₹{sr["s1"]:,.2f}</span></div>'
         sr_html += f'<div style="background:#1e293b;padding:8px 16px;border-radius:8px;text-align:center;border:2px solid #6366f1;"><span style="color:#94a3b8;font-size:0.7em;">PIVOT</span><br><span style="color:#a5b4fc;font-weight:700;">₹{sr["pivot"]:,.2f}</span></div>'
@@ -572,298 +563,339 @@ with tab_chart:
         sr_html += '</div>'
         st.markdown(sr_html, unsafe_allow_html=True)
 
+        # Build candlestick data from yfinance DataFrame
+        candle_data = []
+        vol_data = []
+        for idx, row in df.iterrows():
+            ts = int(idx.timestamp()) if hasattr(idx, 'timestamp') else 0
+            candle_data.append({
+                "time": ts,
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+            })
+            vol_data.append({
+                "time": ts,
+                "value": int(row["Volume"]) if "Volume" in row else 0,
+                "color": "rgba(38,166,154,0.4)" if row["Close"] >= row["Open"] else "rgba(239,83,80,0.4)",
+            })
 
-# ── TAB 3: OPTION CHAIN ──
-with tab_optchain:
-    if not sym.get("nse"):
-        st.info("Option chain not available for this symbol (no NSE symbol).")
+        candle_json = json.dumps(candle_data)
+        vol_json = json.dumps(vol_data)
+
+        # BUY/SELL marker data from all_signals
+        markers = []
+        for s in all_signals:
+            sig_ts = int(s["index"].timestamp()) if hasattr(s["index"], "timestamp") else 0
+            if s["action"] == "BUY":
+                markers.append({
+                    "time": sig_ts,
+                    "position": "belowBar",
+                    "color": "#26a69a",
+                    "shape": "arrowUp",
+                    "text": "BUY",
+                })
+            elif s["action"] == "SELL":
+                markers.append({
+                    "time": sig_ts,
+                    "position": "aboveBar",
+                    "color": "#ef5350",
+                    "shape": "arrowDown",
+                    "text": "SELL",
+                })
+        markers_json = json.dumps(markers)
+
+        chart_html = f"""
+        <div id="chart_container" style="width:100%;height:520px;background:#0e1117;border-radius:10px;overflow:hidden;"></div>
+        <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+        <script>
+        (function() {{
+            var container = document.getElementById('chart_container');
+            var chart = LightweightCharts.createChart(container, {{
+                width: container.clientWidth,
+                height: 520,
+                layout: {{ background: {{ type: 'solid', color: '#0e1117' }}, textColor: '#d1d5db' }},
+                grid: {{ vertLines: {{ color: '#1e293b' }}, horzLines: {{ color: '#1e293b' }} }},
+                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+                rightPriceScale: {{ borderColor: '#1e293b' }},
+                timeScale: {{ borderColor: '#1e293b', timeVisible: true, secondsVisible: false }},
+            }});
+
+            var candleSeries = chart.addCandlestickSeries({{
+                upColor: '#26a69a', downColor: '#ef5350',
+                borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+                wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+            }});
+            candleSeries.setData({candle_json});
+
+            // Support/Resistance lines
+            candleSeries.createPriceLine({{ price: {sr["r2"]}, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'R2' }});
+            candleSeries.createPriceLine({{ price: {sr["r1"]}, color: '#34d399', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'R1' }});
+            candleSeries.createPriceLine({{ price: {sr["pivot"]}, color: '#a5b4fc', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'Pivot' }});
+            candleSeries.createPriceLine({{ price: {sr["s1"]}, color: '#f87171', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'S1' }});
+            candleSeries.createPriceLine({{ price: {sr["s2"]}, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'S2' }});
+
+            // BUY/SELL markers
+            var markers = {markers_json};
+            if (markers.length > 0) {{ candleSeries.setMarkers(markers); }}
+
+            // Volume
+            var volSeries = chart.addHistogramSeries({{
+                priceFormat: {{ type: 'volume' }},
+                priceScaleId: '',
+            }});
+            volSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.85, bottom: 0 }} }});
+            volSeries.setData({vol_json});
+
+            chart.timeScale().fitContent();
+            new ResizeObserver(function() {{ chart.applyOptions({{ width: container.clientWidth }}); }}).observe(container);
+        }})();
+        </script>
+        """
+        components.html(chart_html, height=540, scrolling=False)
+
+        st.caption(f"📊 {selected_symbol} | {chart_period} / {chart_interval} | S/R lines on chart")
     else:
-        st.markdown(f"### 🔗 Option Chain — {selected_symbol} ({sym['nse']})")
+        st.warning("Chart unavailable — market data not loaded. Will retry on next refresh.")
 
-        @st.cache_data(ttl=120)
-        def fetch_full_option_chain(nse_sym):
+
+# ── TAB 3: OPTION CHAIN (Dhan API → NSE fallback) ──
+with tab_optchain:
+    nse_sym = sym.get("nse", "")
+    st.markdown(f"### 🔗 Option Chain — {selected_symbol}" + (f" ({nse_sym})" if nse_sym else ""))
+
+    @st.cache_data(ttl=120)
+    def fetch_option_chain_dhan(symbol_name):
+        """Try Dhan API first, fall back to nsepython."""
+        try:
+            oc = get_option_chain_for_symbol(symbol_name)
+            if oc and oc.get("raw"):
+                return {"source": "dhan", "data": oc}
+        except Exception as e:
+            print(f"[OC] Dhan failed: {e}")
+
+        # Fallback to nsepython
+        nse_s = SYMBOLS.get(symbol_name, {}).get("nse", symbol_name)
+        if nse_s:
             try:
                 from nsepython import option_chain
-                data = option_chain(nse_sym)
+                data = option_chain(nse_s)
                 if data and "records" in data:
-                    return data
+                    return {"source": "nse", "data": data}
             except Exception:
                 pass
-            return None
+        return None
 
-        with st.spinner("Loading option chain..."):
-            oc_data = fetch_full_option_chain(sym["nse"])
-        if oc_data is None:
-            st.warning("Could not fetch option chain data. Will retry on next refresh.")
-        else:
-            records = oc_data["records"]
-            expiry_dates = records.get("expiryDates", [])
-            spot_for_oc = data_ok and spot_price or 0
+    with st.spinner("Loading option chain..."):
+        oc_result = fetch_option_chain_dhan(selected_symbol)
 
-            if expiry_dates:
-                selected_expiry = st.selectbox("Select Expiry", expiry_dates, index=0, key="oc_expiry")
-            else:
-                selected_expiry = None
+    if oc_result is None:
+        st.warning("Could not fetch option chain data. Will retry on next refresh.")
+    elif oc_result["source"] == "dhan":
+        # ── DHAN OPTION CHAIN ──
+        dhan_oc = oc_result["data"]
+        raw = dhan_oc["raw"]
+        spot_for_oc = raw.get("last_price", 0) or (spot_price if data_ok else 0)
+        expiry_list = dhan_oc.get("expiry_list", [])
+        current_expiry = dhan_oc.get("expiry", "")
 
-            if selected_expiry:
-                # Build option chain table
-                chain_rows = []
-                all_strikes = set()
-                for item in records.get("data", []):
-                    if item.get("expiryDate") == selected_expiry:
-                        strike = item.get("strikePrice", 0)
-                        all_strikes.add(strike)
-                        ce = item.get("CE", {})
-                        pe = item.get("PE", {})
-                        chain_rows.append({
-                            "strike": strike,
-                            "ce_oi": ce.get("openInterest", 0),
-                            "ce_oi_chg": ce.get("changeinOpenInterest", 0),
-                            "ce_vol": ce.get("totalTradedVolume", 0),
-                            "ce_iv": ce.get("impliedVolatility", 0),
-                            "ce_ltp": ce.get("lastPrice", 0),
-                            "pe_ltp": pe.get("lastPrice", 0),
-                            "pe_iv": pe.get("impliedVolatility", 0),
-                            "pe_vol": pe.get("totalTradedVolume", 0),
-                            "pe_oi_chg": pe.get("changeinOpenInterest", 0),
-                            "pe_oi": pe.get("openInterest", 0),
-                        })
-
-                chain_rows.sort(key=lambda r: r["strike"])
-
-                # Find ATM strike
-                atm_strike = min(all_strikes, key=lambda s: abs(s - spot_for_oc)) if all_strikes and spot_for_oc > 0 else 0
-
-                # Show only strikes near ATM (10 above, 10 below)
-                if atm_strike > 0:
-                    sorted_strikes = sorted(all_strikes)
-                    atm_idx = sorted_strikes.index(atm_strike) if atm_strike in sorted_strikes else len(sorted_strikes) // 2
-                    visible_strikes = set(sorted_strikes[max(0, atm_idx - 10):atm_idx + 11])
-                    chain_rows = [r for r in chain_rows if r["strike"] in visible_strikes]
-
-                if chain_rows:
-                    # Build HTML table
-                    oc_table = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;text-align:center;">'
-                    oc_table += '<thead><tr style="background:#1e293b;">'
-                    oc_table += '<th style="padding:6px;color:#22c55e;">OI</th>'
-                    oc_table += '<th style="padding:6px;color:#22c55e;">OI Chg</th>'
-                    oc_table += '<th style="padding:6px;color:#22c55e;">Volume</th>'
-                    oc_table += '<th style="padding:6px;color:#22c55e;">IV</th>'
-                    oc_table += '<th style="padding:6px;color:#22c55e;">LTP</th>'
-                    oc_table += '<th style="padding:6px;color:#fbbf24;font-weight:700;">STRIKE</th>'
-                    oc_table += '<th style="padding:6px;color:#ef4444;">LTP</th>'
-                    oc_table += '<th style="padding:6px;color:#ef4444;">IV</th>'
-                    oc_table += '<th style="padding:6px;color:#ef4444;">Volume</th>'
-                    oc_table += '<th style="padding:6px;color:#ef4444;">OI Chg</th>'
-                    oc_table += '<th style="padding:6px;color:#ef4444;">OI</th>'
-                    oc_table += '</tr>'
-                    oc_table += '<tr style="background:#1e293b;"><th colspan="5" style="padding:4px;color:#22c55e;font-size:0.9em;">CALLS</th><th></th><th colspan="5" style="padding:4px;color:#ef4444;font-size:0.9em;">PUTS</th></tr>'
-                    oc_table += '</thead><tbody>'
-
-                    for r in chain_rows:
-                        is_atm = r["strike"] == atm_strike
-                        is_itm_ce = spot_for_oc > 0 and r["strike"] < spot_for_oc  # CE ITM
-                        is_itm_pe = spot_for_oc > 0 and r["strike"] > spot_for_oc  # PE ITM
-                        row_bg = "#1a1a2e" if is_atm else ""
-                        row_border = "border:2px solid #fbbf24;" if is_atm else ""
-                        ce_bg = "background:rgba(34,197,94,0.08);" if is_itm_ce else ""
-                        pe_bg = "background:rgba(239,68,68,0.08);" if is_itm_pe else ""
-                        atm_label = " (ATM)" if is_atm else ""
-
-                        oc_table += f'<tr style="{row_border}border-bottom:1px solid #1e293b;">'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_oi"]:,}</td>'
-                        oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["ce_oi_chg"]>0 else "#ef4444" if r["ce_oi_chg"]<0 else "#e5e7eb"};{ce_bg}">{r["ce_oi_chg"]:,}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_vol"]:,}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_iv"]:.1f}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{ce_bg}">{r["ce_ltp"]:,.2f}</td>'
-                        oc_table += f'<td style="padding:5px;color:#fbbf24;font-weight:700;background:#1a1a2e;">{int(r["strike"]):,}{atm_label}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{pe_bg}">{r["pe_ltp"]:,.2f}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_iv"]:.1f}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_vol"]:,}</td>'
-                        oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["pe_oi_chg"]>0 else "#ef4444" if r["pe_oi_chg"]<0 else "#e5e7eb"};{pe_bg}">{r["pe_oi_chg"]:,}</td>'
-                        oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_oi"]:,}</td>'
-                        oc_table += '</tr>'
-
-                    oc_table += '</tbody></table>'
-                    st.markdown(oc_table, unsafe_allow_html=True)
-
-                    if spot_for_oc > 0:
-                        st.caption(f"Spot: ₹{spot_for_oc:,.2f} | ATM Strike: {int(atm_strike):,} | Expiry: {selected_expiry}")
-                else:
-                    st.info("No option chain rows found for this expiry.")
-
-
-# ── TAB 4: TRADE HISTORY (auto-created) ──
-with tab_trades:
-    st.markdown("### 🟢 Open Trades (Auto-Created)")
-    open_trades = get_open_trades()
-    if open_trades:
-        for t in reversed(open_trades):
-            card_html = f'<div class="trade-card trade-open">'
-            card_html += f'<h3>🟢 BUY {t["instrument"]} {int(t["strike"])} {t["option_type"]} ({t["expiry"]})</h3>'
-            card_html += f'<div class="detail">Entry: <b>₹{t["entry_price"]:,.2f}</b>'
-            if t["target_price"] > 0:
-                card_html += f' | Target: <b>₹{t["target_price"]:,.2f}</b>'
-            if t["stop_loss"] > 0:
-                card_html += f' | SL: <b>₹{t["stop_loss"]:,.2f}</b>'
-            card_html += f'</div>'
-            card_html += f'<div class="detail">Qty: {t["quantity"]} lot(s) x {t["lot_size"]} = {t["quantity"] * t["lot_size"]} units</div>'
-            card_html += f'<div class="detail" style="color:#6b7280;font-size:0.8em;">ID: {t["id"]} | {t["created_at"][:16]}</div>'
-            card_html += '</div>'
-            st.markdown(card_html, unsafe_allow_html=True)
-
-            # Manual close option (in case you want to exit early)
-            with st.expander(f"🔧 Manually close {t['id']}"):
-                exit_p = st.number_input(f"Exit Price", min_value=0.0, value=0.0, step=1.0, format="%.2f", key=f"exit_{t['id']}")
-                col_close, col_del = st.columns(2)
-                with col_close:
-                    if st.button("Close Trade", key=f"close_{t['id']}"):
-                        if exit_p > 0:
-                            closed = close_trade(t["id"], exit_p)
-                            if closed:
-                                send_sms_to_all(closed, action="EXIT")
-                                st.success(f"Closed. P&L: {'+'if closed['pnl']>=0 else ''}₹{closed['pnl']:,.2f}")
-                                st.rerun()
+        if expiry_list:
+            selected_expiry = st.selectbox("Select Expiry", expiry_list, index=expiry_list.index(current_expiry) if current_expiry in expiry_list else 0, key="oc_expiry_dhan")
+            # Re-fetch if different expiry selected
+            if selected_expiry != current_expiry:
+                try:
+                    idx_id = None
+                    sym_upper = selected_symbol.strip().upper()
+                    from dhan_api import get_index_security_id, get_security_id
+                    idx_id = get_index_security_id(sym_upper)
+                    if idx_id:
+                        new_oc = get_option_chain_dhan(idx_id, "IDX_I", selected_expiry)
+                    else:
+                        sec_id = get_security_id(sym.get("nse", sym_upper), "NSE_EQ")
+                        if sec_id:
+                            new_oc = get_option_chain_dhan(sec_id, "NSE_EQ", selected_expiry)
                         else:
-                            st.error("Enter exit price")
-                with col_del:
-                    if st.button("🗑️ Delete", key=f"del_{t['id']}"):
-                        delete_trade(t["id"])
-                        st.rerun()
-    else:
-        st.info("No open trades. Signals will auto-create trades and send SMS when they fire.")
+                            new_oc = raw
+                    if new_oc:
+                        raw = new_oc
+                        spot_for_oc = raw.get("last_price", spot_for_oc)
+                except Exception:
+                    pass
+        else:
+            selected_expiry = current_expiry
 
-    st.markdown("---")
-    st.markdown("### 📕 Closed Trades")
-    closed_trades = get_closed_trades()
-    if closed_trades:
-        total_pnl = sum(t.get("pnl", 0) for t in closed_trades)
-        sign = "+" if total_pnl >= 0 else ""
-        pnl_color = "#22c55e" if total_pnl >= 0 else "#ef4444"
-        st.markdown(f'<p style="font-size:1.1em;">Total P&L: <span style="color:{pnl_color};font-weight:700;">{sign}₹{total_pnl:,.2f}</span> ({len(closed_trades)} trades)</p>', unsafe_allow_html=True)
+        # Parse Dhan option chain format
+        oc_strikes = raw.get("oc", {})
+        if oc_strikes:
+            chain_rows = []
+            all_strikes = set()
+            for strike_str, strike_data in oc_strikes.items():
+                try:
+                    strike_val = float(strike_str)
+                except ValueError:
+                    continue
+                all_strikes.add(strike_val)
+                ce = strike_data.get("ce", strike_data.get("CE", {}))
+                pe = strike_data.get("pe", strike_data.get("PE", {}))
+                chain_rows.append({
+                    "strike": strike_val,
+                    "ce_oi": ce.get("oi", 0),
+                    "ce_oi_chg": ce.get("oi", 0) - ce.get("previous_oi", 0),
+                    "ce_vol": ce.get("volume", 0),
+                    "ce_iv": ce.get("implied_volatility", 0),
+                    "ce_ltp": ce.get("last_price", 0),
+                    "pe_ltp": pe.get("last_price", 0),
+                    "pe_iv": pe.get("implied_volatility", 0),
+                    "pe_vol": pe.get("volume", 0),
+                    "pe_oi_chg": pe.get("oi", 0) - pe.get("previous_oi", 0),
+                    "pe_oi": pe.get("oi", 0),
+                })
 
-        for t in reversed(closed_trades[-15:]):
-            pnl = t.get("pnl", 0)
-            css_class = "trade-closed-profit" if pnl >= 0 else "trade-closed-loss"
-            sign = "+" if pnl >= 0 else ""
-            pnl_color = "#22c55e" if pnl >= 0 else "#ef4444"
-            card_html = f'<div class="trade-card {css_class}">'
-            card_html += f'<h3>{"✅" if pnl >= 0 else "❌"} {t["instrument"]} {int(t["strike"])} {t["option_type"]} ({t["expiry"]})</h3>'
-            card_html += f'<div class="detail">Entry: <b>₹{t["entry_price"]:,.2f}</b> → Exit: <b>₹{t["exit_price"]:,.2f}</b></div>'
-            card_html += f'<div class="pnl" style="color:{pnl_color};">P&L: {sign}₹{pnl:,.2f}</div>'
-            card_html += f'<div class="detail" style="color:#6b7280;font-size:0.8em;">{t.get("exit_time", "")[:16]}</div>'
-            card_html += '</div>'
-            st.markdown(card_html, unsafe_allow_html=True)
-    else:
-        st.info("No closed trades yet.")
+            chain_rows.sort(key=lambda r: r["strike"])
+            atm_strike = min(all_strikes, key=lambda s: abs(s - spot_for_oc)) if all_strikes and spot_for_oc > 0 else 0
 
+            if atm_strike > 0:
+                sorted_strikes = sorted(all_strikes)
+                atm_idx = sorted_strikes.index(atm_strike) if atm_strike in sorted_strikes else len(sorted_strikes) // 2
+                visible_strikes = set(sorted_strikes[max(0, atm_idx - 10):atm_idx + 11])
+                chain_rows = [r for r in chain_rows if r["strike"] in visible_strikes]
 
-# ── TAB 5: PORTFOLIO ──
-with tab_portfolio:
-    st.markdown("### 💰 Portfolio Dashboard")
+            if chain_rows:
+                oc_table = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;text-align:center;">'
+                oc_table += '<thead><tr style="background:#1e293b;">'
+                oc_table += '<th style="padding:6px;color:#22c55e;">OI</th><th style="padding:6px;color:#22c55e;">OI Chg</th><th style="padding:6px;color:#22c55e;">Volume</th><th style="padding:6px;color:#22c55e;">IV</th><th style="padding:6px;color:#22c55e;">LTP</th>'
+                oc_table += '<th style="padding:6px;color:#fbbf24;font-weight:700;">STRIKE</th>'
+                oc_table += '<th style="padding:6px;color:#ef4444;">LTP</th><th style="padding:6px;color:#ef4444;">IV</th><th style="padding:6px;color:#ef4444;">Volume</th><th style="padding:6px;color:#ef4444;">OI Chg</th><th style="padding:6px;color:#ef4444;">OI</th>'
+                oc_table += '</tr>'
+                oc_table += '<tr style="background:#1e293b;"><th colspan="5" style="padding:4px;color:#22c55e;font-size:0.9em;">CALLS</th><th></th><th colspan="5" style="padding:4px;color:#ef4444;font-size:0.9em;">PUTS</th></tr>'
+                oc_table += '</thead><tbody>'
 
-    port_open = get_open_trades()
-    port_closed = get_closed_trades()
-    all_trades_count = len(port_open) + len(port_closed)
+                for r in chain_rows:
+                    is_atm = r["strike"] == atm_strike
+                    is_itm_ce = spot_for_oc > 0 and r["strike"] < spot_for_oc
+                    is_itm_pe = spot_for_oc > 0 and r["strike"] > spot_for_oc
+                    row_border = "border:2px solid #fbbf24;" if is_atm else ""
+                    ce_bg = "background:rgba(34,197,94,0.08);" if is_itm_ce else ""
+                    pe_bg = "background:rgba(239,68,68,0.08);" if is_itm_pe else ""
+                    atm_label = " (ATM)" if is_atm else ""
 
-    # Summary stats
-    total_pnl_port = sum(t.get("pnl", 0) for t in port_closed) if port_closed else 0
-    wins = [t for t in port_closed if t.get("pnl", 0) > 0]
-    losses = [t for t in port_closed if t.get("pnl", 0) <= 0]
-    win_rate = (len(wins) / len(port_closed) * 100) if port_closed else 0
-    best_trade = max((t.get("pnl", 0) for t in port_closed), default=0) if port_closed else 0
-    worst_trade = min((t.get("pnl", 0) for t in port_closed), default=0) if port_closed else 0
-    avg_pnl = (total_pnl_port / len(port_closed)) if port_closed else 0
+                    oc_table += f'<tr style="{row_border}border-bottom:1px solid #1e293b;">'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_oi"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["ce_oi_chg"]>0 else "#ef4444" if r["ce_oi_chg"]<0 else "#e5e7eb"};{ce_bg}">{r["ce_oi_chg"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_vol"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_iv"]:.1f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{ce_bg}">{r["ce_ltp"]:,.2f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#fbbf24;font-weight:700;background:#1a1a2e;">{int(r["strike"]):,}{atm_label}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{pe_bg}">{r["pe_ltp"]:,.2f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_iv"]:.1f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_vol"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["pe_oi_chg"]>0 else "#ef4444" if r["pe_oi_chg"]<0 else "#e5e7eb"};{pe_bg}">{r["pe_oi_chg"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_oi"]:,}</td>'
+                    oc_table += '</tr>'
 
-    # Summary cards row
-    sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
-    pnl_col = "#22c55e" if total_pnl_port >= 0 else "#ef4444"
-    pnl_sign = "+" if total_pnl_port >= 0 else ""
-    with sc1:
-        st.markdown(f'<div class="indicator-card"><h4>TOTAL P&L</h4><div class="value" style="color:{pnl_col};">{pnl_sign}₹{total_pnl_port:,.2f}</div></div>', unsafe_allow_html=True)
-    with sc2:
-        wr_col = "#22c55e" if win_rate >= 50 else "#ef4444"
-        st.markdown(f'<div class="indicator-card"><h4>WIN RATE</h4><div class="value" style="color:{wr_col};">{win_rate:.1f}%</div></div>', unsafe_allow_html=True)
-    with sc3:
-        st.markdown(f'<div class="indicator-card"><h4>TOTAL TRADES</h4><div class="value">{all_trades_count}</div></div>', unsafe_allow_html=True)
-    with sc4:
-        st.markdown(f'<div class="indicator-card"><h4>BEST TRADE</h4><div class="value" style="color:#22c55e;">+₹{best_trade:,.2f}</div></div>', unsafe_allow_html=True)
-    with sc5:
-        st.markdown(f'<div class="indicator-card"><h4>WORST TRADE</h4><div class="value" style="color:#ef4444;">₹{worst_trade:,.2f}</div></div>', unsafe_allow_html=True)
-    with sc6:
-        avg_col = "#22c55e" if avg_pnl >= 0 else "#ef4444"
-        avg_sign = "+" if avg_pnl >= 0 else ""
-        st.markdown(f'<div class="indicator-card"><h4>AVG P&L</h4><div class="value" style="color:{avg_col};">{avg_sign}₹{avg_pnl:,.2f}</div></div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # Open Positions
-    st.markdown("#### 🟢 Open Positions")
-    if port_open:
-        for t in reversed(port_open):
-            # Fetch current LTP only during market hours (avoid slow calls when closed)
-            current_ltp = None
-            if is_market_open():
-                t_sym_info = SYMBOLS.get(t["instrument"], {})
-                t_nse = t_sym_info.get("nse", "")
-                if t_nse:
-                    try:
-                        current_ltp = get_current_option_ltp(t_nse, t["strike"], t["option_type"], t["expiry"])
-                    except Exception:
-                        pass
-
-            card_html = f'<div class="trade-card trade-open">'
-            card_html += f'<h3>🟢 {t["instrument"]} {int(t["strike"])} {t["option_type"]} ({t["expiry"]})</h3>'
-            card_html += f'<div class="detail">Entry: <b>₹{t["entry_price"]:,.2f}</b>'
-            if current_ltp is not None:
-                unrealized = (current_ltp - t["entry_price"]) * t["quantity"] * t["lot_size"]
-                u_col = "#22c55e" if unrealized >= 0 else "#ef4444"
-                u_sign = "+" if unrealized >= 0 else ""
-                card_html += f' | Current: <b>₹{current_ltp:,.2f}</b>'
-                card_html += f'</div>'
-                card_html += f'<div class="pnl" style="color:{u_col};">Unrealized P&L: {u_sign}₹{unrealized:,.2f}</div>'
+                oc_table += '</tbody></table>'
+                st.markdown(oc_table, unsafe_allow_html=True)
+                src_badge = '<span style="background:#6366f1;color:white;padding:2px 8px;border-radius:4px;font-size:0.7em;">Dhan API</span>'
+                if spot_for_oc > 0:
+                    st.caption(f"Spot: ₹{spot_for_oc:,.2f} | ATM Strike: {int(atm_strike):,} | Expiry: {selected_expiry}")
+                st.markdown(f"Data source: {src_badge}", unsafe_allow_html=True)
             else:
-                card_html += f'</div>'
-                card_html += f'<div class="detail" style="color:#6b7280;">Current LTP unavailable</div>'
-            card_html += f'<div class="detail" style="color:#6b7280;font-size:0.8em;">{t["created_at"][:16]}</div>'
-            card_html += '</div>'
-            st.markdown(card_html, unsafe_allow_html=True)
-    else:
-        st.info("No open positions.")
+                st.info("No option chain rows found for this expiry.")
+        else:
+            st.warning("Option chain data empty from Dhan API.")
 
-    st.markdown("---")
+    elif oc_result["source"] == "nse":
+        # ── NSE FALLBACK OPTION CHAIN ──
+        records = oc_result["data"]["records"]
+        expiry_dates = records.get("expiryDates", [])
+        spot_for_oc = data_ok and spot_price or 0
 
-    # Cumulative P&L chart (running total)
-    st.markdown("#### 📊 Cumulative P&L")
-    if port_closed:
-        cum_pnl = 0
-        cum_data = []
-        for t in port_closed:
-            cum_pnl += t.get("pnl", 0)
-            trade_label = f'{t["instrument"]} {int(t["strike"])}{t["option_type"]}'
-            cum_data.append({"Trade": trade_label, "Cumulative P&L": round(cum_pnl, 2)})
+        if expiry_dates:
+            selected_expiry = st.selectbox("Select Expiry", expiry_dates, index=0, key="oc_expiry")
+        else:
+            selected_expiry = None
 
-        # Build simple bar chart with HTML
-        if cum_data:
-            max_abs = max(abs(d["Cumulative P&L"]) for d in cum_data) or 1
-            chart_html = '<div style="padding:8px;">'
-            for i, d in enumerate(cum_data):
-                val = d["Cumulative P&L"]
-                pct = abs(val) / max_abs * 100
-                bar_col = "#22c55e" if val >= 0 else "#ef4444"
-                sign_str = "+" if val >= 0 else ""
-                chart_html += f'<div style="display:flex;align-items:center;margin:3px 0;gap:8px;">'
-                chart_html += f'<span style="color:#94a3b8;font-size:0.75em;min-width:60px;text-align:right;">#{i+1}</span>'
-                chart_html += f'<div style="background:{bar_col};height:16px;width:{pct}%;border-radius:3px;min-width:2px;"></div>'
-                chart_html += f'<span style="color:{bar_col};font-size:0.8em;font-weight:600;">{sign_str}₹{val:,.2f}</span>'
-                chart_html += '</div>'
-            chart_html += '</div>'
-            st.markdown(chart_html, unsafe_allow_html=True)
-    else:
-        st.info("No closed trades yet to show P&L chart.")
+        if selected_expiry:
+            chain_rows = []
+            all_strikes = set()
+            for item in records.get("data", []):
+                if item.get("expiryDate") == selected_expiry:
+                    strike = item.get("strikePrice", 0)
+                    all_strikes.add(strike)
+                    ce = item.get("CE", {})
+                    pe = item.get("PE", {})
+                    chain_rows.append({
+                        "strike": strike,
+                        "ce_oi": ce.get("openInterest", 0),
+                        "ce_oi_chg": ce.get("changeinOpenInterest", 0),
+                        "ce_vol": ce.get("totalTradedVolume", 0),
+                        "ce_iv": ce.get("impliedVolatility", 0),
+                        "ce_ltp": ce.get("lastPrice", 0),
+                        "pe_ltp": pe.get("lastPrice", 0),
+                        "pe_iv": pe.get("impliedVolatility", 0),
+                        "pe_vol": pe.get("totalTradedVolume", 0),
+                        "pe_oi_chg": pe.get("changeinOpenInterest", 0),
+                        "pe_oi": pe.get("openInterest", 0),
+                    })
+
+            chain_rows.sort(key=lambda r: r["strike"])
+            atm_strike = min(all_strikes, key=lambda s: abs(s - spot_for_oc)) if all_strikes and spot_for_oc > 0 else 0
+
+            if atm_strike > 0:
+                sorted_strikes = sorted(all_strikes)
+                atm_idx = sorted_strikes.index(atm_strike) if atm_strike in sorted_strikes else len(sorted_strikes) // 2
+                visible_strikes = set(sorted_strikes[max(0, atm_idx - 10):atm_idx + 11])
+                chain_rows = [r for r in chain_rows if r["strike"] in visible_strikes]
+
+            if chain_rows:
+                oc_table = '<table style="width:100%;border-collapse:collapse;font-size:0.82em;text-align:center;">'
+                oc_table += '<thead><tr style="background:#1e293b;">'
+                oc_table += '<th style="padding:6px;color:#22c55e;">OI</th><th style="padding:6px;color:#22c55e;">OI Chg</th><th style="padding:6px;color:#22c55e;">Volume</th><th style="padding:6px;color:#22c55e;">IV</th><th style="padding:6px;color:#22c55e;">LTP</th>'
+                oc_table += '<th style="padding:6px;color:#fbbf24;font-weight:700;">STRIKE</th>'
+                oc_table += '<th style="padding:6px;color:#ef4444;">LTP</th><th style="padding:6px;color:#ef4444;">IV</th><th style="padding:6px;color:#ef4444;">Volume</th><th style="padding:6px;color:#ef4444;">OI Chg</th><th style="padding:6px;color:#ef4444;">OI</th>'
+                oc_table += '</tr>'
+                oc_table += '<tr style="background:#1e293b;"><th colspan="5" style="padding:4px;color:#22c55e;font-size:0.9em;">CALLS</th><th></th><th colspan="5" style="padding:4px;color:#ef4444;font-size:0.9em;">PUTS</th></tr>'
+                oc_table += '</thead><tbody>'
+
+                for r in chain_rows:
+                    is_atm = r["strike"] == atm_strike
+                    is_itm_ce = spot_for_oc > 0 and r["strike"] < spot_for_oc
+                    is_itm_pe = spot_for_oc > 0 and r["strike"] > spot_for_oc
+                    row_border = "border:2px solid #fbbf24;" if is_atm else ""
+                    ce_bg = "background:rgba(34,197,94,0.08);" if is_itm_ce else ""
+                    pe_bg = "background:rgba(239,68,68,0.08);" if is_itm_pe else ""
+                    atm_label = " (ATM)" if is_atm else ""
+
+                    oc_table += f'<tr style="{row_border}border-bottom:1px solid #1e293b;">'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_oi"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["ce_oi_chg"]>0 else "#ef4444" if r["ce_oi_chg"]<0 else "#e5e7eb"};{ce_bg}">{r["ce_oi_chg"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_vol"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{ce_bg}">{r["ce_iv"]:.1f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{ce_bg}">{r["ce_ltp"]:,.2f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#fbbf24;font-weight:700;background:#1a1a2e;">{int(r["strike"]):,}{atm_label}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;font-weight:600;{pe_bg}">{r["pe_ltp"]:,.2f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_iv"]:.1f}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_vol"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:{"#22c55e" if r["pe_oi_chg"]>0 else "#ef4444" if r["pe_oi_chg"]<0 else "#e5e7eb"};{pe_bg}">{r["pe_oi_chg"]:,}</td>'
+                    oc_table += f'<td style="padding:5px;color:#e5e7eb;{pe_bg}">{r["pe_oi"]:,}</td>'
+                    oc_table += '</tr>'
+
+                oc_table += '</tbody></table>'
+                st.markdown(oc_table, unsafe_allow_html=True)
+                src_badge = '<span style="background:#f59e0b;color:black;padding:2px 8px;border-radius:4px;font-size:0.7em;">NSE</span>'
+                if spot_for_oc > 0:
+                    st.caption(f"Spot: ₹{spot_for_oc:,.2f} | ATM Strike: {int(atm_strike):,} | Expiry: {selected_expiry}")
+                st.markdown(f"Data source: {src_badge}", unsafe_allow_html=True)
+            else:
+                st.info("No option chain rows found for this expiry.")
 
 
-# ── TAB 6: NEWS + AI ──
+
+
+
+
+# ── TAB 4: NEWS + AI ──
 with tab_news:
     nc, ac_col = st.columns([3, 2])
     with nc:
@@ -899,7 +931,7 @@ with tab_news:
             st.info("Market data unavailable — AI analysis will appear when data loads.")
 
 
-# ── TAB 7: SMS ADMIN ──
+# ── TAB 5: SMS ADMIN ──
 with tab_sms:
     sms_col1, sms_col2 = st.columns([1, 1])
 
