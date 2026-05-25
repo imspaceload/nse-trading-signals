@@ -125,10 +125,27 @@ def evaluate_oi(oi_data: Optional[dict]) -> dict:
 
 
 def compute_support_resistance(df: pd.DataFrame) -> dict:
-    """Compute 2 support, 2 resistance, and pivot from recent price data."""
-    high = float(df["High"].max())
-    low = float(df["Low"].min())
-    close = float(df["Close"].iloc[-1])
+    """Compute pivot points from PREVIOUS day's H/L/C — stays fixed for the day."""
+    try:
+        daily = df.copy()
+        daily["date"] = daily.index.date
+        dates = sorted(daily["date"].unique())
+
+        if len(dates) >= 2:
+            # Previous day's data → pivots stay fixed all day
+            prev_day = daily[daily["date"] == dates[-2]]
+            high = float(prev_day["High"].max())
+            low = float(prev_day["Low"].min())
+            close = float(prev_day["Close"].iloc[-1])
+        else:
+            # Only 1 day — use current data as fallback
+            high = float(df["High"].max())
+            low = float(df["Low"].min())
+            close = float(df["Close"].iloc[-1])
+    except Exception:
+        high = float(df["High"].max())
+        low = float(df["Low"].min())
+        close = float(df["Close"].iloc[-1])
 
     pivot = round((high + low + close) / 3, 2)
     r1 = round(2 * pivot - low, 2)

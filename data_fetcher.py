@@ -52,7 +52,7 @@ def get_spot_price(symbol: str) -> Optional[float]:
 
 
 def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    """Fetch intraday OHLCV — single attempt, fast."""
+    """Fetch intraday OHLCV — tries requested period, then wider fallbacks."""
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
@@ -60,14 +60,17 @@ def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> 
             return df
     except Exception:
         pass
-    # One fallback with shorter period
-    try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period="1d", interval=interval)
-        if not df.empty:
-            return df
-    except Exception:
-        pass
+    # Fallback chain: 2d → 5d (handles early market open when 1d is empty)
+    for fb_period in ["2d", "5d"]:
+        if fb_period == period:
+            continue
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=fb_period, interval=interval)
+            if not df.empty:
+                return df
+        except Exception:
+            pass
     return pd.DataFrame()
 
 

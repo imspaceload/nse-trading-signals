@@ -607,7 +607,12 @@ else if(Notification.permission!=='denied'){{Notification.requestPermission();}}
     # ── TAB 1: CHART (Candlestick with Support/Resistance) ──
     with tab_chart:
         if data_ok and not df.empty:
-            sr = compute_support_resistance(df)
+            # Fetch 5d data for pivot calculation (needs previous day's H/L/C)
+            @st.cache_data(ttl=300)
+            def _get_pivot_data(yf_sym):
+                return get_intraday_data(yf_sym, "5d", "15m")
+            pivot_df = _get_pivot_data(sym["yf"])
+            sr = compute_support_resistance(pivot_df if pivot_df is not None and not pivot_df.empty else df)
 
             # Support/Resistance cards at top
             sr_html = '<div style="display:flex;gap:8px;margin-bottom:12px;justify-content:center;">'
