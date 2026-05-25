@@ -9,6 +9,8 @@ import numpy as np
 import json
 import difflib
 
+import zerodha_api
+
 from config import (
     SYMBOLS, STOP_LOSS_PCT, TARGET_PCT,
     RSI_PERIOD, RSI_OVERBOUGHT, RSI_OVERSOLD,
@@ -81,6 +83,28 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# ═══════════════════════════════════════════════
+#  Zerodha Kite Connect — OAuth handler + token restore
+# ═══════════════════════════════════════════════
+
+# Try to restore today's saved token on every cold start
+if "kite_restore_attempted" not in st.session_state:
+    st.session_state.kite_restore_attempted = True
+    zerodha_api.restore_saved_token()
+
+# Handle Zerodha OAuth redirect: ?request_token=xxx&action=login
+_qp = st.query_params
+if _qp.get("action") == "login" and _qp.get("request_token"):
+    _rt = _qp["request_token"]
+    _tok = zerodha_api.complete_login(_rt)
+    if _tok:
+        st.session_state["kite_just_connected"] = True
+    # Clear query params so it doesn't re-run on refresh
+    st.query_params.clear()
+    st.rerun()
+
+kite_live = zerodha_api.is_connected() if zerodha_api.is_configured() else False
 
 _refresh_ms = 15_000 if is_market_open() else 300_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
@@ -502,11 +526,19 @@ mkt_open = is_market_open()
 mkt_color = "#ef4444" if not mkt_open else "#4caf50"
 mkt_text  = "MARKET CLOSED" if not mkt_open else "MARKET OPEN"
 
+_data_badge = (
+    '<span style="background:#7c3aed;color:white;padding:2px 8px;border-radius:20px;'
+    'font-size:0.6em;font-weight:700;flex-shrink:0;">⚡ LIVE · Kite</span>'
+    if kite_live else
+    '<span style="background:#374151;color:#9ca3af;padding:2px 8px;border-radius:20px;'
+    'font-size:0.6em;font-weight:600;flex-shrink:0;">15m delay · Yahoo</span>'
+)
 top_html = f"""
 <div style="background:#141428;border-bottom:1px solid #2a2a4a;padding:6px 14px;
             display:flex;align-items:center;gap:18px;overflow-x:auto;white-space:nowrap;min-height:36px;">
   <span style="background:{mkt_color};color:white;padding:2px 10px;border-radius:20px;
                font-size:0.65em;font-weight:700;flex-shrink:0;">● {mkt_text}</span>
+  {_data_badge}
   <span style="display:flex;gap:4px;align-items:center;">{_idx_pill("NIFTY", "NIFTY 50")}</span>
   <span style="color:#2a2a4a;">│</span>
   <span style="display:flex;gap:4px;align-items:center;">{_idx_pill("BANK", "BANK NIFTY")}</span>
@@ -1366,6 +1398,126 @@ setTimeout(()=>beep({'1100' if action=='BUY' else '330'},500),800);
     #  TAB 4: SMS ADMIN
     # ══════════════════════════════════════════
     with tab_sms:
+        # ══════════════════════════════════════════
+        #  ZERODHA KITE CONNECT — auth & status
+        # ══════════════════════════════════════════
+        kite_configured = zerodha_api.is_configured()
+
+        if st.session_state.get("kite_just_connected"):
+            st.success("Zerodha connected! Real-time data is now live.")
+            del st.session_state["kite_just_connected"]
+
+        with st.expander(
+            f"{'⚡ Zerodha Connected — Real-Time Data LIVE' if kite_live else ('🔗 Connect Zerodha for Real-Time Data' if kite_configured else '🔑 Configure Zerodha API Keys')}",
+            expanded=not kite_live,
+        ):
+            if not kite_configured:
+                st.markdown("""
+<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:8px;padding:14px;font-size:0.85em;color:#9ca3af;">
+<b style="color:#e8e8e8;">Setup steps:</b><br><br>
+1. Subscribe to <b>Kite Connect</b> at <code>developers.kite.trade</code> (₹2,000/month)<br>
+2. Create a new app → get your <b>API Key</b> and <b>API Secret</b><br>
+3. Set redirect URL to your Railway app URL (e.g. <code>https://your-app.up.railway.app/</code>)<br>
+4. Add to Railway environment variables:<br>
+&nbsp;&nbsp;&nbsp;<code>KITE_API_KEY</code> = your api key<br>
+&nbsp;&nbsp;&nbsp;<code>KITE_API_SECRET</code> = your api secret<br>
+5. Redeploy → come back here to connect
+</div>
+""", unsafe_allow_html=True)
+            elif kite_live:
+                try:
+                    profile = zerodha_api.get_profile()
+                    margins = zerodha_api.get_margins()
+                    equity  = margins.get("equity", {}).get("available", {})
+                    cash    = equity.get("cash", 0) or equity.get("live_balance", 0)
+                    st.markdown(f"""
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+    <div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;">ACCOUNT</div>
+    <div style="color:#e8e8e8;font-weight:600;">{profile.get('user_name','--')}</div>
+    <div style="color:#4b5563;font-size:0.7em;">{profile.get('user_id','--')}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+    <div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;">AVAILABLE MARGIN</div>
+    <div style="color:#4caf50;font-weight:700;font-size:1.1em;">₹{cash:,.0f}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+    <div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;">DATA FEED</div>
+    <div style="color:#7c3aed;font-weight:700;">⚡ REAL-TIME</div>
+    <div style="color:#4b5563;font-size:0.7em;">Kite Connect v3</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                except Exception:
+                    st.success("Zerodha is connected and streaming real-time data.")
+
+                # Show today's orders + positions
+                pos_col, ord_col = st.columns(2)
+                with pos_col:
+                    st.markdown('<div style="color:#9ca3af;font-size:0.8em;font-weight:600;margin-bottom:4px;">TODAY\'S POSITIONS</div>', unsafe_allow_html=True)
+                    try:
+                        positions = zerodha_api.get_positions().get("day", [])
+                        if positions:
+                            for p in positions[:5]:
+                                pnl = p.get("pnl", 0)
+                                clr = "#4caf50" if pnl >= 0 else "#ef4444"
+                                st.markdown(
+                                    f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:6px 8px;margin-bottom:4px;font-size:0.78em;">'
+                                    f'<span style="color:#e8e8e8;font-weight:600;">{p.get("tradingsymbol","")}</span>'
+                                    f'<span style="color:#6b7280;margin:0 6px;">Qty: {p.get("quantity",0)}</span>'
+                                    f'<span style="color:{clr};font-weight:600;">P&L: {pnl:+,.0f}</span></div>',
+                                    unsafe_allow_html=True
+                                )
+                        else:
+                            st.markdown('<div style="color:#4b5563;font-size:0.78em;">No open positions today</div>', unsafe_allow_html=True)
+                    except Exception:
+                        st.markdown('<div style="color:#4b5563;font-size:0.78em;">--</div>', unsafe_allow_html=True)
+
+                with ord_col:
+                    st.markdown('<div style="color:#9ca3af;font-size:0.8em;font-weight:600;margin-bottom:4px;">TODAY\'S ORDERS</div>', unsafe_allow_html=True)
+                    try:
+                        orders = zerodha_api.get_orders()
+                        if orders:
+                            for o in orders[-5:]:
+                                status = o.get("status", "")
+                                s_clr = "#4caf50" if status == "COMPLETE" else ("#ef4444" if status == "REJECTED" else "#f59e0b")
+                                st.markdown(
+                                    f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:6px 8px;margin-bottom:4px;font-size:0.78em;">'
+                                    f'<span style="color:#e8e8e8;">{o.get("tradingsymbol","")}</span>'
+                                    f'<span style="color:#6b7280;margin:0 6px;">{o.get("transaction_type","")} {o.get("quantity",0)}</span>'
+                                    f'<span style="color:{s_clr};">{status}</span></div>',
+                                    unsafe_allow_html=True
+                                )
+                        else:
+                            st.markdown('<div style="color:#4b5563;font-size:0.78em;">No orders today</div>', unsafe_allow_html=True)
+                    except Exception:
+                        st.markdown('<div style="color:#4b5563;font-size:0.78em;">--</div>', unsafe_allow_html=True)
+
+                if st.button("Disconnect Zerodha", key="kite_disconnect"):
+                    zerodha_api._save_token("", "")
+                    st.session_state.kite_restore_attempted = False
+                    st.rerun()
+
+            else:
+                # Configured but not connected — show login button
+                login_url = zerodha_api.get_login_url()
+                st.markdown(f"""
+<div style="text-align:center;padding:16px;">
+  <div style="color:#9ca3af;font-size:0.85em;margin-bottom:14px;">
+    Token expires at midnight daily. Click below to log in with your Zerodha account.
+  </div>
+  <a href="{login_url}" target="_blank" style="background:#7c3aed;color:white;padding:10px 24px;
+     border-radius:6px;font-weight:700;font-size:0.9em;text-decoration:none;display:inline-block;">
+    ⚡ Connect Zerodha
+  </a>
+  <div style="color:#4b5563;font-size:0.72em;margin-top:10px;">
+    After login, Zerodha will redirect you back here automatically.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+        st.markdown("---")
+
         subs_list = get_subscribers()
         sms_log   = get_sms_log()
         open_trades_count = len(get_open_trades())

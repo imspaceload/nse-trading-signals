@@ -255,7 +255,23 @@ def get_spot_price(symbol: str, nse_symbol: str = None) -> Optional[float]:
             except Exception:
                 pass
 
-    # 3. Yahoo Finance fast_info
+    # 3. Kite Connect LTP (real-time when connected)
+    try:
+        from zerodha_api import get_ltp as _kite_ltp, is_connected as _kite_ok
+        if _kite_ok() and nse_symbol:
+            nse_upper = nse_symbol.strip().upper()
+            kite_sym_map = {
+                "NIFTY": "NIFTY 50", "BANKNIFTY": "BANK NIFTY",
+                "FINNIFTY": "FIN NIFTY", "MIDCPNIFTY": "MIDCAP SELECT",
+            }
+            kite_sym = kite_sym_map.get(nse_upper, nse_upper)
+            p = _kite_ltp(kite_sym)
+            if p and p > 0:
+                return p
+    except Exception:
+        pass
+
+    # 4. Yahoo Finance fast_info
     try:
         t = yf.Ticker(symbol)
         price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
@@ -297,7 +313,33 @@ def get_chart_data(yf_symbol: str, timeframe: str = "1D") -> pd.DataFrame:
 
 
 def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    """Fetch OHLCV with automatic period fallbacks."""
+    """
+    Fetch OHLCV. Uses Kite Connect when connected (real-time), else Yahoo Finance (15-min delayed).
+    symbol can be a yfinance symbol (^NSEI) or NSE name (NIFTY 50 / RELIANCE).
+    """
+    # Try Kite Connect first (real-time data)
+    try:
+        from zerodha_api import get_historical_data as _kite_hist, is_connected as _kite_ok
+        if _kite_ok():
+            # Map yfinance symbols to NSE names for Kite
+            _yf_to_nse = {
+                "^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY",
+                "^CNXFIN": "FIN NIFTY",
+            }
+            kite_sym = _yf_to_nse.get(symbol, symbol.replace(".NS", ""))
+            # Map interval string to timeframe key
+            _inv_map = {
+                "1m": "1m", "2m": "3m", "5m": "5m",
+                "15m": "15m", "30m": "30m", "60m": "1h", "1d": "1D",
+            }
+            tf = _inv_map.get(interval, "5m")
+            df = _kite_hist(kite_sym, tf)
+            if not df.empty:
+                return df
+    except Exception:
+        pass
+
+    # Fallback: Yahoo Finance (15-min delayed)
     for p in [period, "2d", "5d"]:
         try:
             t = yf.Ticker(symbol)
