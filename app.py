@@ -104,7 +104,8 @@ if _qp.get("action") == "login" and _qp.get("request_token"):
     st.query_params.clear()
     st.rerun()
 
-kite_configured = zerodha_api.is_configured()
+import os as _os
+kite_configured = bool(_os.environ.get("KITE_API_KEY","").strip() and _os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
 _refresh_ms = 15_000 if is_market_open() else 300_000
@@ -158,22 +159,40 @@ div[data-testid="stTabsTabList"] {
 }
 [data-testid="stTabsContent"] { padding: 12px 4px !important; }
 
-/* ── Left panel watchlist buttons ── */
+/* ── Left panel watchlist buttons — Zerodha flat row style ── */
 div[data-testid="column"]:first-child [data-testid="stButton"] button {
     background: transparent !important;
     border: none !important;
-    border-bottom: 1px solid rgba(42,42,74,0.5) !important;
+    border-bottom: 1px solid rgba(42,42,74,0.4) !important;
     border-radius: 0 !important;
-    color: #d1d5db !important;
-    font-size: 0.82em !important;
-    font-weight: 500 !important;
-    padding: 7px 6px !important;
+    color: #e2e8f0 !important;
+    font-size: 0.83em !important;
+    font-weight: 600 !important;
+    padding: 7px 8px 4px 8px !important;
     text-align: left !important;
     width: 100% !important;
-    transition: background 0.12s !important;
+    letter-spacing: 0.2px !important;
+    transition: background 0.1s !important;
+    box-shadow: none !important;
 }
 div[data-testid="column"]:first-child [data-testid="stButton"] button:hover {
-    background: rgba(56,126,209,0.08) !important;
+    background: rgba(56,126,209,0.07) !important;
+    color: #fff !important;
+}
+/* × delete button */
+div[data-testid="column"]:first-child + div[data-testid="column"] [data-testid="stButton"] button {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    color: #4b5563 !important;
+    font-size: 0.85em !important;
+    padding: 4px 2px !important;
+    min-height: 0 !important;
+    box-shadow: none !important;
+}
+div[data-testid="column"]:first-child + div[data-testid="column"] [data-testid="stButton"] button:hover {
+    color: #ef4444 !important;
+    background: transparent !important;
 }
 
 /* ── Radio as button group (timeframe/chart type) ── */
@@ -597,71 +616,31 @@ with left_col:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Global Cues ──
-    cues = _load_global_cues()
-    def _cue_cell(label: str, key: str, fmt: str = ",.2f") -> str:
-        d = cues.get(key)
-        if not d or not d.get("price"):
-            return f'<div><div style="color:#4b5563;font-size:0.6em;text-transform:uppercase;">{label}</div><div style="color:#6b7280;font-size:0.82em;font-weight:600;">--</div></div>'
-        p   = d["price"]
-        pct = d.get("pct", 0)
-        c   = _pct_color(pct)
-        sgn = "+" if pct >= 0 else ""
-        p_str = f"{p:,.2f}" if "." in fmt else f"${p:,.2f}"
-        return (
-            f'<div><div style="color:#4b5563;font-size:0.6em;text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
-            f'<div style="color:#e8e8e8;font-size:0.82em;font-weight:600;">{p_str}</div>'
-            f'<div style="color:{c};font-size:0.65em;">{sgn}{pct:.2f}%</div></div>'
-        )
-
-    st.markdown(f"""
-    <div style="padding:8px 12px;border-bottom:1px solid #2a2a4a;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;">GLOBAL CUES</span>
-        <span style="color:#4caf50;font-size:0.58em;">● LIVE</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-        {_cue_cell("SGX NIFTY", "sgx_nifty")}
-        {_cue_cell("DOW (F)", "dow_futures")}
-        {_cue_cell("BRENT", "brent", ",.2f")}
-        {_cue_cell("USD/INR", "usdinr")}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
     # ── Watchlist ──
     saved_watchlist = get_watchlist()
-    # Default watchlist if empty
     if not saved_watchlist:
         defaults = ["NIFTY 50", "BANK NIFTY", "RELIANCE", "HDFC BANK", "TCS", "INFOSYS", "IDEA"]
         for d in defaults:
             add_to_watchlist(d)
         saved_watchlist = get_watchlist()
 
-    wl_prices = {}
-    wl_sparklines = {}
-    if saved_watchlist:
-        wl_prices = _load_wl_prices(tuple(saved_watchlist))
-        wl_sparklines = _load_sparklines(tuple(saved_watchlist))
-
-    subs = get_subscribers()
+    wl_prices    = _load_wl_prices(tuple(saved_watchlist))    if saved_watchlist else {}
+    wl_sparklines = _load_sparklines(tuple(saved_watchlist))  if saved_watchlist else {}
     active_alerts = sum(1 for t in get_open_trades())
 
+    # ── Watchlist header ──
     st.markdown(f"""
-    <div style="padding:6px 12px 4px 12px;border-bottom:1px solid #2a2a4a;display:flex;justify-content:space-between;align-items:center;">
-      <span style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST 1</span>
-      <span style="color:#9ca3af;font-size:0.58em;">{len(saved_watchlist)} of 250 · {active_alerts} alerts active</span>
-    </div>
-    """, unsafe_allow_html=True)
+<div style="padding:7px 10px 5px 10px;border-bottom:1px solid #2a2a4a;
+            display:flex;justify-content:space-between;align-items:center;">
+  <span style="color:#6b7280;font-size:0.58em;text-transform:uppercase;letter-spacing:1px;font-weight:600;">WATCHLIST 1</span>
+  <span style="color:#4b5563;font-size:0.58em;">{len(saved_watchlist)} of 250</span>
+</div>""", unsafe_allow_html=True)
 
+    # ── Search bar ──
     sym_search = st.text_input(
-        "Search",
-        placeholder="Search NIFTY, RELIANCE...",
-        key="wl_search",
-        label_visibility="collapsed",
+        "Search", placeholder="Search eg. NIFTY, RELIANCE...",
+        key="wl_search", label_visibility="collapsed",
     )
-
-    # If search typed, resolve and select
     if sym_search.strip():
         candidates = _find_symbol_candidates(sym_search.strip())
         if len(candidates) == 1:
@@ -673,61 +652,60 @@ with left_col:
                 st.session_state.active_symbol = sel
                 st.rerun()
 
-    # Watchlist items
+    # ── Watchlist items — Zerodha style ──
     for wl_name in saved_watchlist:
-        sym_info = SYMBOLS.get(wl_name, {})
-        nse_s = sym_info.get("nse", wl_name)
-        disp = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name, ""))[0]
+        sym_info  = SYMBOLS.get(wl_name, {})
+        nse_s     = sym_info.get("nse", wl_name)
+        disp      = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name, ""))[0]
         full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name, ""))[1]
-        p = wl_prices.get(wl_name)
+        p         = wl_prices.get(wl_name)
         spark_pts = wl_sparklines.get(wl_name, [])
 
-        # Price + change
         if p:
             price_str = f"{p:,.2f}"
-            prev_close = spark_pts[0] if spark_pts else p
-            pct_chg = round((p - prev_close) / prev_close * 100, 2) if prev_close else 0
-            pct_str = f"{'+'if pct_chg>=0 else ''}{pct_chg:.2f}%"
-            clr = _pct_color(pct_chg)
+            prev      = spark_pts[0] if spark_pts else p
+            pct_chg   = round((p - prev) / prev * 100, 2) if prev else 0
+            pct_str   = f"{'+'if pct_chg>=0 else ''}{pct_chg:.2f}%"
+            clr       = _pct_color(pct_chg)
         else:
             price_str, pct_str, clr = "--", "--", "#6b7280"
 
-        spark_color = _pct_color(float(pct_str.replace("%", "").replace("+", "")) if pct_str not in ("--",) else 0)
-        spark_svg = make_sparkline(spark_pts, color=spark_color) if spark_pts else ""
+        spark_svg  = make_sparkline(spark_pts, color=clr, w=60, h=22) if spark_pts else ""
+        is_active  = (wl_name == active_sym_key)
+        left_bar   = "3px solid #387ed1" if is_active else "3px solid transparent"
+        row_bg     = "rgba(56,126,209,0.06)" if is_active else "transparent"
 
-        is_active = (wl_name == active_sym_key)
-        active_border = "border-left:3px solid #387ed1;" if is_active else "border-left:3px solid transparent;"
-
-        item_cols = st.columns([10, 1])
-        with item_cols[0]:
-            btn_label = f"{disp}  ·  {price_str}"
-            if st.button(btn_label, key=f"wl_{wl_name}", use_container_width=True):
+        # Row: symbol · price  |  × button
+        r_cols = st.columns([11, 1])
+        with r_cols[0]:
+            if st.button(
+                f"{disp}　　{price_str}",
+                key=f"wl_{wl_name}",
+                use_container_width=True,
+            ):
                 st.session_state._wl_selected = wl_name
                 st.rerun()
-        with item_cols[1]:
+        with r_cols[1]:
             if st.button("×", key=f"wl_del_{wl_name}"):
                 remove_from_watchlist(wl_name)
                 st.rerun()
 
-        # Sparkline + price/change row
-        if spark_svg:
-            st.markdown(
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:0 6px 4px 6px;{active_border}">'
-                f'<span style="color:#4b5563;font-size:0.6em;">{full_name}</span>'
-                f'<span style="display:flex;align-items:center;gap:6px;">'
-                f'{spark_svg}'
-                f'<span style="color:{clr};font-size:0.68em;font-weight:600;">{pct_str}</span>'
-                f'</span></div>',
-                unsafe_allow_html=True,
-            )
+        # Detail row: full name · sparkline · %change
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:0 4px 6px 4px;border-left:{left_bar};background:{row_bg};">'
+            f'<span style="color:#4b5563;font-size:0.65em;">{full_name}</span>'
+            f'<span style="display:flex;align-items:center;gap:5px;">'
+            f'{spark_svg}'
+            f'<span style="color:{clr};font-size:0.7em;font-weight:600;">{pct_str}</span>'
+            f'</span></div>',
+            unsafe_allow_html=True,
+        )
 
-    # Add to watchlist
+    # ── Add symbol ──
     wl_input = st.text_input(
-        "Add/Remove",
-        placeholder="+ IDEA  or  - COFORGE",
-        key="wl_input",
-        label_visibility="collapsed",
+        "Add", placeholder="+ IDEA   or   - COFORGE",
+        key="wl_input", label_visibility="collapsed",
     )
     if wl_input.strip():
         inp = wl_input.strip()
