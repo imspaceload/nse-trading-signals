@@ -52,6 +52,15 @@ def compute_macd(df: pd.DataFrame) -> dict:
 
 
 def compute_supertrend(df: pd.DataFrame) -> dict:
+    # Need at least SUPERTREND_PERIOD + 1 rows for ATR calculation
+    if len(df) < SUPERTREND_PERIOD + 1:
+        return {
+            "value": round(float(df["Close"].iloc[-1]), 2),
+            "direction": 1,
+            "signal": "NEUTRAL",
+            "series": pd.Series(np.zeros(len(df)), index=df.index),
+            "direction_series": [1] * len(df),
+        }
     high = df["High"].values
     low = df["Low"].values
     close = df["Close"].values

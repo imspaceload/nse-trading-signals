@@ -420,8 +420,9 @@ with right_col:
     with st.spinner(f"Loading {selected_symbol} data..."):
         try:
             inst_data = compute_for_symbol(sym["yf"], sym["nse"], chart_period, chart_interval)
-        except Exception:
+        except Exception as e:
             inst_data = None
+            st.caption(f"Debug: {type(e).__name__}: {e}")
         try:
             news = fetch_news()
         except Exception:
