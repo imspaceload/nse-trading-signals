@@ -156,8 +156,11 @@ def get_kite():
 
 
 def is_configured() -> bool:
-    """True if API key + secret are set in environment. Always reads fresh."""
-    return bool(_kite_api_key() and _kite_api_secret())
+    """True if API key + secret are present in environment variables."""
+    return bool(
+        os.environ.get("KITE_API_KEY", "").strip() and
+        os.environ.get("KITE_API_SECRET", "").strip()
+    )
 
 
 # Cache connected state for 60s to avoid profile() call on every render
