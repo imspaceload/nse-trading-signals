@@ -104,7 +104,8 @@ if _qp.get("action") == "login" and _qp.get("request_token"):
     st.query_params.clear()
     st.rerun()
 
-kite_live = zerodha_api.is_connected() if zerodha_api.is_configured() else False
+kite_configured = zerodha_api.is_configured()
+kite_live = zerodha_api.is_connected() if kite_configured else False
 
 _refresh_ms = 15_000 if is_market_open() else 300_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
@@ -420,19 +421,21 @@ def _market_sentiment_score(rsi_val, pcr, st_dir, vwap_sig) -> int:
 #  Cached Data Loaders
 # ═══════════════════════════════════════════════
 
-@st.cache_data(ttl=30)
+_mkt_open_now = is_market_open()
+
+@st.cache_data(ttl=45 if _mkt_open_now else 300)
 def _load_indices():
     return get_nse_indices()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90 if _mkt_open_now else 600)
 def _load_global_cues():
     return get_global_cues()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def _load_news():
     return scrape_moneycontrol_news()
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=30 if _mkt_open_now else 300)
 def _load_wl_prices(symbols_tuple):
     results = {}
     def _f(name):
@@ -444,12 +447,16 @@ def _load_wl_prices(symbols_tuple):
         except Exception:
             return name, None
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-        for fut in concurrent.futures.as_completed([ex.submit(_f, n) for n in symbols_tuple]):
-            n, p = fut.result()
-            results[n] = p
+        futs = [ex.submit(_f, n) for n in symbols_tuple]
+        for fut in concurrent.futures.as_completed(futs, timeout=10):
+            try:
+                n, p = fut.result()
+                results[n] = p
+            except Exception:
+                pass
     return results
 
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=300)
 def _load_sparklines(symbols_tuple):
     results = {}
     def _f(name):
@@ -459,29 +466,33 @@ def _load_sparklines(symbols_tuple):
         except Exception:
             return name, []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        for fut in concurrent.futures.as_completed([ex.submit(_f, n) for n in symbols_tuple]):
-            n, pts = fut.result()
-            results[n] = pts
+        futs = [ex.submit(_f, n) for n in symbols_tuple]
+        for fut in concurrent.futures.as_completed(futs, timeout=15):
+            try:
+                n, pts = fut.result()
+                results[n] = pts
+            except Exception:
+                pass
     return results
 
-@st.cache_data(ttl=12)
+@st.cache_data(ttl=20 if _mkt_open_now else 300)
 def _load_symbol_data(yf_sym, nse_sym, timeframe):
     period, interval = {"1m":("1d","1m"), "3m":("1d","2m"), "5m":("1d","5m"),
                         "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d")}.get(timeframe, ("1d","5m"))
     spot, df, oi = None, pd.DataFrame(), None
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-            pf = ex.submit(get_spot_price, yf_sym, nse_sym)
+            pf   = ex.submit(get_spot_price, yf_sym, nse_sym)
             df_f = ex.submit(get_intraday_data, yf_sym, period, interval)
             oi_f = ex.submit(get_option_chain_data, nse_sym) if nse_sym else None
-            spot = pf.result(timeout=12)
-            df   = df_f.result(timeout=12)
-            oi   = oi_f.result(timeout=10) if oi_f else None
+            spot = pf.result(timeout=10)
+            df   = df_f.result(timeout=10)
+            oi   = oi_f.result(timeout=8) if oi_f else None
     except Exception:
         pass
     return spot, df if df is not None else pd.DataFrame(), oi
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=120 if _mkt_open_now else 600)
 def _load_option_chain_nse(nse_sym):
     return get_option_chain_nse_direct(nse_sym)
 
@@ -1401,7 +1412,6 @@ setTimeout(()=>beep({'1100' if action=='BUY' else '330'},500),800);
         # ══════════════════════════════════════════
         #  ZERODHA KITE CONNECT — auth & status
         # ══════════════════════════════════════════
-        kite_configured = zerodha_api.is_configured()
 
         if st.session_state.get("kite_just_connected"):
             st.success("Zerodha connected! Real-time data is now live.")

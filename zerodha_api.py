@@ -26,8 +26,15 @@ def _get_secret(key: str, default: str = "") -> str:
         return default
 
 
-KITE_API_KEY    = _get_secret("KITE_API_KEY")
-KITE_API_SECRET = _get_secret("KITE_API_SECRET")
+def _kite_api_key() -> str:
+    return os.environ.get("KITE_API_KEY") or _get_secret("KITE_API_KEY")
+
+def _kite_api_secret() -> str:
+    return os.environ.get("KITE_API_SECRET") or _get_secret("KITE_API_SECRET")
+
+# Keep module-level refs for backward compat (refreshed via functions above)
+KITE_API_KEY    = _kite_api_key()
+KITE_API_SECRET = _kite_api_secret()
 
 # ── Token Persistence ──────────────────────────────────────────────────────
 
@@ -131,40 +138,52 @@ _instruments_loaded_at: float = 0
 
 
 def get_kite():
-    """Return the KiteConnect instance (lazy init)."""
+    """Return the KiteConnect instance (lazy init). Re-reads API key each call."""
     global _kite
+    api_key = _kite_api_key()
+    if not api_key:
+        return None
     if _kite is not None:
         return _kite
-    if not KITE_API_KEY:
-        return None
     with _kite_lock:
         if _kite is None:
             try:
                 from kiteconnect import KiteConnect
-                _kite = KiteConnect(api_key=KITE_API_KEY)
+                _kite = KiteConnect(api_key=_kite_api_key())
             except Exception:
                 return None
     return _kite
 
 
 def is_configured() -> bool:
-    """True if API key + secret are set in environment."""
-    return bool(KITE_API_KEY and KITE_API_SECRET)
+    """True if API key + secret are set in environment. Always reads fresh."""
+    return bool(_kite_api_key() and _kite_api_secret())
+
+
+# Cache connected state for 60s to avoid profile() call on every render
+_connected_cache: bool = False
+_connected_checked_at: float = 0
+_CONNECTED_TTL = 60
 
 
 def is_connected() -> bool:
-    """True if access token is set and valid (profile call succeeds)."""
-    global _kite_connected
+    """True if access token is valid. Cached 60s to avoid per-render network call."""
+    global _connected_cache, _connected_checked_at, _kite_connected
+    now = time.time()
+    if now - _connected_checked_at < _CONNECTED_TTL:
+        return _connected_cache
     kite = get_kite()
     if not kite:
         return False
     try:
         kite.profile()
+        _connected_cache = True
         _kite_connected = True
-        return True
     except Exception:
+        _connected_cache = False
         _kite_connected = False
-        return False
+    _connected_checked_at = now
+    return _connected_cache
 
 
 def restore_saved_token() -> bool:
@@ -207,8 +226,10 @@ def complete_login(request_token: str) -> Optional[str]:
         kite.set_access_token(access_token)
         today = datetime.now(IST).strftime("%Y-%m-%d")
         _save_token(access_token, today)
-        global _kite_connected
+        global _kite_connected, _connected_cache, _connected_checked_at
         _kite_connected = True
+        _connected_cache = True
+        _connected_checked_at = time.time()
         return access_token
     except Exception as e:
         return None
