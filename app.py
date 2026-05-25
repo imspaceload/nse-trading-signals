@@ -48,8 +48,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Auto-refresh: 60s during market hours, 5 min when closed
-_refresh_ms = 60_000 if is_market_open() else 300_000
+# Auto-refresh: 15s during market hours (fast chart updates), 5 min when closed
+_refresh_ms = 15_000 if is_market_open() else 300_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 # ── Kite-style CSS ──
@@ -363,7 +363,7 @@ with right_col:
     #  DATA FETCHING
     # ══════════════════════════════════════════
 
-    @st.cache_data(ttl=55)
+    @st.cache_data(ttl=12)
     def fetch_data(yf_symbol, nse_symbol, period, interval):
         spot, df, oi = None, pd.DataFrame(), None
         try:
