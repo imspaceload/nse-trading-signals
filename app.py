@@ -511,42 +511,30 @@ with center_col:
         if new_tf != st.session_state.chart_tf:
             st.session_state.chart_tf = new_tf; st.cache_data.clear(); st.rerun()
 
-    # ── TradingView Widget ──
+    # ── TradingView Widget (iframe embed — reliable across all symbols) ──
     tv_sym = active_sym.get("tv", f"NSE:{active_sym.get('nse', active_sym_key)}")
     tv_int = _TV_INT.get(st.session_state.chart_tf, "5")
 
-    tv_html = f"""
-<div id="tv_wrap" style="background:#131722;border-radius:8px;overflow:hidden;height:460px;">
-  <div id="tv_chart" style="width:100%;height:100%;"></div>
-</div>
-<script>
-(function() {{
-  var script = document.createElement('script');
-  script.src = 'https://s3.tradingview.com/tv.js';
-  script.onload = function() {{
-    new TradingView.widget({{
-      container_id: "tv_chart",
-      symbol: "{tv_sym}",
-      interval: "{tv_int}",
-      timezone: "Asia/Kolkata",
-      theme: "dark",
-      style: "1",
-      locale: "en",
-      toolbar_bg: "#131722",
-      enable_publishing: false,
-      allow_symbol_change: true,
-      hide_side_toolbar: false,
-      width: "100%",
-      height: 460,
-      studies: ["Volume@tv-basicstudies"],
-      show_popup_button: false,
-      withdateranges: true,
-      save_image: false
-    }});
-  }};
-  document.head.appendChild(script);
-}})();
-</script>"""
+    from urllib.parse import quote as _uq
+    tv_url = (
+        "https://www.tradingview.com/widgetembed/"
+        f"?symbol={_uq(tv_sym)}"
+        f"&interval={tv_int}"
+        "&theme=dark&style=1&locale=in"
+        "&timezone=Asia%2FKolkata"
+        "&toolbarbg=131722"
+        "&hidesidetoolbar=0"
+        "&symboledit=1"
+        "&withdateranges=1"
+        "&saveimage=0"
+        "&studies=Volume%40tv-basicstudies"
+    )
+    tv_html = (
+        '<div style="background:#131722;border-radius:8px;overflow:hidden;height:460px;">'
+        f'<iframe src="{tv_url}" style="width:100%;height:460px;border:none;" '
+        'frameborder="0" allowtransparency="true" scrolling="no"></iframe>'
+        '</div>'
+    )
     st.components.v1.html(tv_html, height=468, scrolling=False)
 
     # ── Indicators row ──

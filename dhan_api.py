@@ -410,12 +410,19 @@ def get_candles_for_symbol(symbol: str, period: str = "5d",
 #  OPTION CHAIN
 # ══════════════════════════════════════════
 
+def _seg_to_type(segment: str) -> str:
+    """Map Dhan exchange segment to UnderlyingType for option chain API."""
+    if "IDX" in segment:
+        return "IDX"
+    return "EQUITY"
+
+
 def get_expiry_list(underlying_security_id: int, underlying_segment: str = "IDX_I") -> list:
     """Get list of active expiry dates for an underlying."""
     try:
         body = {
-            "UnderlyingScri": underlying_security_id,
-            "UnderlyingSeg": underlying_segment,
+            "UnderlyingScrip": underlying_security_id,
+            "UnderlyingType": _seg_to_type(underlying_segment),
         }
         resp = requests.post(
             f"{BASE_URL}/optionchain/expirylist",
@@ -440,17 +447,17 @@ def get_option_chain_dhan(underlying_security_id: int,
     """
     try:
         body = {
-            "UnderlyingScri": underlying_security_id,
-            "UnderlyingSeg": underlying_segment,
+            "UnderlyingScrip": underlying_security_id,
+            "UnderlyingType": _seg_to_type(underlying_segment),
         }
         if expiry:
-            body["Expiry"] = expiry
+            body["ExpiryDate"] = expiry
 
         resp = requests.post(
             f"{BASE_URL}/optionchain",
             headers=_headers(),
             json=body,
-            timeout=10,
+            timeout=15,
         )
         resp.raise_for_status()
         return resp.json()
@@ -467,6 +474,10 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
     """
     sym = symbol.strip().upper()
 
+    if not _is_configured():
+        print(f"[Dhan] Not configured — DHAN_ACCESS_TOKEN missing")
+        return None
+
     # Determine underlying security ID and segment
     idx_id = get_index_security_id(sym)
     if idx_id is not None:
@@ -477,11 +488,15 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
         seg = "NSE_EQ"
 
     if sec_id is None:
+        print(f"[Dhan] Security ID not found for {sym}")
         return None
+
+    print(f"[Dhan] OC lookup: sym={sym} sec_id={sec_id} seg={seg} type={_seg_to_type(seg)}")
 
     # Get expiry list if not provided
     if not expiry:
         expiries = get_expiry_list(sec_id, seg)
+        print(f"[Dhan] Expiries for {sym}: {expiries[:3] if expiries else 'NONE'}")
         if expiries:
             expiry = expiries[0]  # nearest expiry
         else:
@@ -490,7 +505,11 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
     # Fetch option chain
     oc_data = get_option_chain_dhan(sec_id, seg, expiry)
     if not oc_data:
+        print(f"[Dhan] Empty OC response for {sym} expiry={expiry}")
         return None
+
+    oc_keys = list(oc_data.get("oc", {}).keys())[:3] if "oc" in oc_data else list(oc_data.keys())[:5]
+    print(f"[Dhan] OC response keys: {oc_keys} last_price={oc_data.get('last_price')}")
 
     return {
         "raw": oc_data,
