@@ -519,26 +519,32 @@ with center_col:
 <div id="tv_wrap" style="background:#131722;border-radius:8px;overflow:hidden;height:460px;">
   <div id="tv_chart" style="width:100%;height:100%;"></div>
 </div>
-<script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 (function() {{
-  new TradingView.widget({{
-    container_id: "tv_chart",
-    symbol: "{tv_sym}",
-    interval: "{tv_int}",
-    timezone: "Asia/Kolkata",
-    theme: "dark",
-    style: "1",
-    locale: "en",
-    toolbar_bg: "#131722",
-    enable_publishing: false,
-    allow_symbol_change: false,
-    hide_side_toolbar: false,
-    width: "100%",
-    height: 460,
-    studies: ["RSI@tv-basicstudies", "Volume@tv-basicstudies"],
-    show_popup_button: false
-  }});
+  var script = document.createElement('script');
+  script.src = 'https://s3.tradingview.com/tv.js';
+  script.onload = function() {{
+    new TradingView.widget({{
+      container_id: "tv_chart",
+      symbol: "{tv_sym}",
+      interval: "{tv_int}",
+      timezone: "Asia/Kolkata",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      toolbar_bg: "#131722",
+      enable_publishing: false,
+      allow_symbol_change: true,
+      hide_side_toolbar: false,
+      width: "100%",
+      height: 460,
+      studies: ["Volume@tv-basicstudies"],
+      show_popup_button: false,
+      withdateranges: true,
+      save_image: false
+    }});
+  }};
+  document.head.appendChild(script);
 }})();
 </script>"""
     st.components.v1.html(tv_html, height=468, scrolling=False)

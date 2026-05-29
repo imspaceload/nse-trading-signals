@@ -9,9 +9,9 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 #   tv   - TradingView widget symbol (for live chart)
 SYMBOLS = {
     # ── Indices ──
-    "NIFTY 50":         {"yf": "^NSEI",           "nse": "NIFTY",       "tv": "CAPITALCOM:IN50"},
-    "BANK NIFTY":       {"yf": "^NSEBANK",        "nse": "BANKNIFTY",   "tv": "CAPITALCOM:BANKNIFTY"},
-    "SENSEX":           {"yf": "^BSESN",          "nse": "",            "tv": "CAPITALCOM:SENSEX"},
+    "NIFTY 50":         {"yf": "^NSEI",           "nse": "NIFTY",       "tv": "NSE:NIFTY50"},
+    "BANK NIFTY":       {"yf": "^NSEBANK",        "nse": "BANKNIFTY",   "tv": "NSE:BANKNIFTY"},
+    "SENSEX":           {"yf": "^BSESN",          "nse": "",            "tv": "BSE:SENSEX"},
     # ── Commodities ──
     "MCX CRUDE OIL":    {"yf": "CL=F",            "nse": "",            "tv": "MCX:CRUDEOIL1!"},
     "MCX NATURAL GAS":  {"yf": "NG=F",            "nse": "",            "tv": "MCX:NATURALGAS1!"},

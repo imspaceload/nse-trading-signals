@@ -16,20 +16,38 @@ from config import (
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# ── NSE direct (simple, no session warmup needed from Indian IP) ──
 _NSE_HDRS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-    "Referer": "https://www.nseindia.com/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.nseindia.com/",
+    "X-Requested-With": "XMLHttpRequest",
 }
 
-def _nse(url: str, timeout: int = 8) -> Optional[dict]:
+_nse_session: Optional[requests.Session] = None
+
+def _get_nse_session() -> requests.Session:
+    global _nse_session
+    if _nse_session is None:
+        s = requests.Session()
+        s.headers.update(_NSE_HDRS)
+        try:
+            s.get("https://www.nseindia.com", timeout=8)
+        except Exception:
+            pass
+        _nse_session = s
+    return _nse_session
+
+def _nse(url: str, timeout: int = 10) -> Optional[dict]:
     try:
-        r = requests.get(url, headers=_NSE_HDRS, timeout=timeout)
+        s = _get_nse_session()
+        r = s.get(url, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except Exception:
+        global _nse_session
+        _nse_session = None
         return None
 
 
