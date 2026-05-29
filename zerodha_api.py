@@ -602,3 +602,150 @@ def get_profile() -> dict:
         return kite.profile()
     except Exception:
         return {}
+
+
+# ── Option Chain ───────────────────────────────────────────────────────────
+
+# NFO instrument cache: {underlying_name: [row_dicts]}
+_nfo_cache: Dict[str, list] = {}
+_nfo_cache_at: float = 0
+_NFO_CACHE_TTL = 21600  # 6 hours
+
+
+def _get_nfo_instruments(underlying: str) -> list:
+    """Load NFO instruments for an underlying from Kite, with 6h cache."""
+    global _nfo_cache, _nfo_cache_at
+    now = time.time()
+    if _nfo_cache and (now - _nfo_cache_at) < _NFO_CACHE_TTL:
+        return _nfo_cache.get(underlying.upper(), [])
+
+    kite = get_kite()
+    if not kite:
+        return []
+    try:
+        rows = kite.instruments("NFO")
+        cache: Dict[str, list] = {}
+        for r in rows:
+            name = (r.get("name") or "").strip().upper()
+            if name:
+                cache.setdefault(name, []).append(r)
+        _nfo_cache = cache
+        _nfo_cache_at = now
+    except Exception:
+        pass
+    return _nfo_cache.get(underlying.upper(), [])
+
+
+def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]:
+    """
+    Build a full option chain for symbol_nse using Kite Connect.
+    Returns data in NSE format compatible with app.py's option chain renderer:
+      {"records": {"expiryDates": [...], "data": [{"strikePrice": ..., "CE": {...}, "PE": {...}}]}}
+    Returns None if Kite is not connected or data unavailable.
+    """
+    kite = get_kite()
+    if not kite:
+        return None
+
+    # Map NSE symbol names to NFO instrument "name" field
+    _nfo_name_map = {
+        "NIFTY":      "NIFTY",
+        "BANKNIFTY":  "BANKNIFTY",
+        "FINNIFTY":   "FINNIFTY",
+        "MIDCPNIFTY": "MIDCPNIFTY",
+    }
+    nfo_name = _nfo_name_map.get(symbol_nse.upper(), symbol_nse.upper())
+
+    contracts = _get_nfo_instruments(nfo_name)
+    if not contracts:
+        return None
+
+    # Collect expiry dates (CE/PE options only)
+    import datetime as dt_mod
+    expiry_set = set()
+    for c in contracts:
+        if c.get("instrument_type") in ("CE", "PE") and c.get("expiry"):
+            expiry_set.add(c["expiry"])  # date object
+
+    if not expiry_set:
+        return None
+
+    sorted_expiries = sorted(expiry_set)
+    target_expiry = sorted_expiries[0]
+    if expiry:
+        # Try to match provided expiry string (DD-Mon-YYYY or YYYY-MM-DD)
+        for e in sorted_expiries:
+            e_str = e.strftime("%Y-%m-%d") if hasattr(e, "strftime") else str(e)
+            if expiry in (e_str, e.strftime("%d-%b-%Y") if hasattr(e, "strftime") else ""):
+                target_expiry = e
+                break
+
+    # Filter to CE/PE for target expiry
+    relevant = [
+        c for c in contracts
+        if c.get("instrument_type") in ("CE", "PE") and c.get("expiry") == target_expiry
+    ]
+    if not relevant:
+        return None
+
+    # Fetch quotes in batches of 200 (Kite limit)
+    token_to_contract = {int(c["instrument_token"]): c for c in relevant}
+    all_tokens = list(token_to_contract.keys())
+    quotes = {}
+    BATCH = 200
+    for i in range(0, len(all_tokens), BATCH):
+        batch_tokens = all_tokens[i:i + BATCH]
+        instruments_param = [
+            f"NFO:{token_to_contract[t]['tradingsymbol']}" for t in batch_tokens
+        ]
+        try:
+            raw = kite.quote(instruments_param)
+            quotes.update(raw)
+        except Exception:
+            pass
+
+    # Get spot price
+    spot = get_ltp(nfo_name, "NSE") or 0
+
+    # Build NSE-compatible records
+    strike_map: Dict[float, dict] = {}
+    expiry_fmt = target_expiry.strftime("%d-%b-%Y").upper() if hasattr(target_expiry, "strftime") else str(target_expiry)
+
+    for token, contract in token_to_contract.items():
+        strike = float(contract.get("strike", 0))
+        opt_type = contract.get("instrument_type", "")  # "CE" or "PE"
+        ts_key = f"NFO:{contract['tradingsymbol']}"
+        q = quotes.get(ts_key, {})
+        ohlc = q.get("ohlc", {})
+        depth = q.get("depth", {})
+
+        entry = {
+            "strikePrice": strike,
+            "expiryDate": expiry_fmt,
+            "openInterest": q.get("oi", 0),
+            "changeinOpenInterest": q.get("oi", 0) - q.get("oi_day_low", 0),
+            "lastPrice": q.get("last_price", 0),
+            "totalTradedVolume": q.get("volume", 0),
+            "impliedVolatility": 0,
+            "bidprice": (depth.get("buy", [{}]) or [{}])[0].get("price", 0),
+            "askprice": (depth.get("sell", [{}]) or [{}])[0].get("price", 0),
+        }
+
+        if strike not in strike_map:
+            strike_map[strike] = {"strikePrice": strike, "expiryDate": expiry_fmt}
+        strike_map[strike][opt_type] = entry
+
+    records_data = sorted(strike_map.values(), key=lambda r: r["strikePrice"])
+    expiry_dates_fmt = [
+        e.strftime("%d-%b-%Y").upper() if hasattr(e, "strftime") else str(e)
+        for e in sorted_expiries
+    ]
+
+    return {
+        "records": {
+            "expiryDates": expiry_dates_fmt,
+            "data": records_data,
+            "underlyingValue": spot,
+        },
+        "_source": "kite",
+    }

@@ -368,13 +368,30 @@ def get_sparkline_data(yf_symbol: str, n: int = 18) -> List[float]:
 # ═══════════════════════════════════════════════
 
 def get_option_chain_nse_direct(symbol_nse: str) -> Optional[dict]:
-    """Fetch option chain from NSE India API using managed session."""
+    """
+    Fetch option chain. Tries NSE India API first; falls back to Kite Connect
+    when NSE rate-limits the server (common on cloud IPs).
+    """
     sym = symbol_nse.strip().upper()
+
+    # 1. NSE India direct API
     if sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"):
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={sym}"
     else:
         url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sym}"
-    return _nse_fetch(url, timeout=14)
+    data = _nse_fetch(url, timeout=14)
+    if data and "records" in data:
+        return data
+
+    # 2. Kite Connect fallback (when NSE blocks/rate-limits cloud IP)
+    try:
+        from zerodha_api import get_option_chain_kite, is_connected as kite_ok
+        if kite_ok():
+            return get_option_chain_kite(sym)
+    except Exception:
+        pass
+
+    return None
 
 
 def compute_option_stats(records_data: list, expiry: str, spot: float) -> dict:
