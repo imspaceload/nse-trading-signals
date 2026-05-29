@@ -3,9 +3,12 @@ Zerodha Kite Connect integration.
 Handles OAuth login, real-time data, historical candles, and order placement for algo trading.
 """
 import os
+import io
+import csv
 import time
 import json
 import threading
+import requests as _requests
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import pandas as pd
@@ -31,6 +34,16 @@ def _kite_api_key() -> str:
 
 def _kite_api_secret() -> str:
     return os.environ.get("KITE_API_SECRET") or _get_secret("KITE_API_SECRET")
+
+def _kite_access_token() -> str:
+    """Return the current live access token from the active kite instance."""
+    global _kite
+    if _kite is not None:
+        try:
+            return _kite.access_token or ""
+        except Exception:
+            pass
+    return os.environ.get("KITE_ACCESS_TOKEN") or _get_secret("KITE_ACCESS_TOKEN")
 
 # Keep module-level refs for backward compat (refreshed via functions above)
 KITE_API_KEY    = _kite_api_key()
@@ -612,27 +625,80 @@ _nfo_cache_at: float = 0
 _NFO_CACHE_TTL = 21600  # 6 hours
 
 
+_NFO_DISK_CACHE = os.path.expanduser("~/.cache/kite-nfo-instruments.json")
+
+
 def _get_nfo_instruments(underlying: str) -> list:
-    """Load NFO instruments for an underlying from Kite, with 6h cache."""
+    """
+    Load all NFO instruments from Kite using raw HTTP (30s timeout) with
+    disk cache (6h TTL) so the download only happens once per deployment.
+    """
     global _nfo_cache, _nfo_cache_at
     now = time.time()
+
+    # In-memory cache hit
     if _nfo_cache and (now - _nfo_cache_at) < _NFO_CACHE_TTL:
         return _nfo_cache.get(underlying.upper(), [])
 
-    kite = get_kite()
-    if not kite:
-        return []
+    # Try disk cache first
     try:
-        rows = kite.instruments("NFO")
-        cache: Dict[str, list] = {}
+        if os.path.exists(_NFO_DISK_CACHE):
+            age = now - os.path.getmtime(_NFO_DISK_CACHE)
+            if age < _NFO_CACHE_TTL:
+                with open(_NFO_DISK_CACHE) as f:
+                    rows = json.load(f)
+                cache: Dict[str, list] = {}
+                for r in rows:
+                    name = (r.get("name") or "").strip().upper()
+                    if name:
+                        cache.setdefault(name, []).append(r)
+                _nfo_cache = cache
+                _nfo_cache_at = now
+                print(f"[Kite OC] Loaded {len(rows)} NFO instruments from disk cache")
+                return _nfo_cache.get(underlying.upper(), [])
+    except Exception as e:
+        print(f"[Kite OC] Disk cache read failed: {e}")
+
+    # Download from Kite API directly (raw HTTP, 30s timeout)
+    api_key = _kite_api_key()
+    access_token = _kite_access_token()
+    if not api_key or not access_token:
+        print("[Kite OC] No credentials — cannot load NFO instruments")
+        return []
+
+    try:
+        hdrs = {
+            "Authorization": f"token {api_key}:{access_token}",
+            "X-Kite-Version": "3",
+        }
+        resp = _requests.get(
+            "https://api.kite.trade/instruments/NFO",
+            headers=hdrs,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        reader = csv.DictReader(io.StringIO(resp.text))
+        rows = list(reader)
+
+        # Save to disk cache
+        try:
+            os.makedirs(os.path.dirname(_NFO_DISK_CACHE), exist_ok=True)
+            with open(_NFO_DISK_CACHE, "w") as f:
+                json.dump(rows, f)
+        except Exception:
+            pass
+
+        cache = {}
         for r in rows:
             name = (r.get("name") or "").strip().upper()
             if name:
                 cache.setdefault(name, []).append(r)
         _nfo_cache = cache
         _nfo_cache_at = now
-    except Exception:
-        pass
+        print(f"[Kite OC] Downloaded {len(rows)} NFO instruments from Kite API")
+    except Exception as e:
+        print(f"[Kite OC] NFO instrument download failed: {e}")
+
     return _nfo_cache.get(underlying.upper(), [])
 
 
@@ -658,65 +724,80 @@ def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]
 
     contracts = _get_nfo_instruments(nfo_name)
     if not contracts:
+        print(f"[Kite OC] No contracts found for {nfo_name}")
         return None
 
-    # Collect expiry dates (CE/PE options only)
-    import datetime as dt_mod
+    # expiry field from raw CSV is a string "YYYY-MM-DD"
+    # Collect unique expiry strings for CE/PE only
     expiry_set = set()
     for c in contracts:
-        if c.get("instrument_type") in ("CE", "PE") and c.get("expiry"):
-            expiry_set.add(c["expiry"])  # date object
+        itype = (c.get("instrument_type") or "").strip().upper()
+        exp = (c.get("expiry") or "").strip()
+        if itype in ("CE", "PE") and exp:
+            expiry_set.add(exp)
 
     if not expiry_set:
+        print(f"[Kite OC] No expiry dates found for {nfo_name}")
         return None
 
-    sorted_expiries = sorted(expiry_set)
+    sorted_expiries = sorted(expiry_set)  # "YYYY-MM-DD" sorts correctly
     target_expiry = sorted_expiries[0]
     if expiry:
-        # Try to match provided expiry string (DD-Mon-YYYY or YYYY-MM-DD)
         for e in sorted_expiries:
-            e_str = e.strftime("%Y-%m-%d") if hasattr(e, "strftime") else str(e)
-            if expiry in (e_str, e.strftime("%d-%b-%Y") if hasattr(e, "strftime") else ""):
+            if expiry == e or expiry in e:
                 target_expiry = e
                 break
 
     # Filter to CE/PE for target expiry
     relevant = [
         c for c in contracts
-        if c.get("instrument_type") in ("CE", "PE") and c.get("expiry") == target_expiry
+        if (c.get("instrument_type") or "").strip().upper() in ("CE", "PE")
+        and (c.get("expiry") or "").strip() == target_expiry
     ]
     if not relevant:
+        print(f"[Kite OC] No contracts for expiry {target_expiry}")
         return None
 
+    print(f"[Kite OC] Building chain for {nfo_name} expiry={target_expiry}, {len(relevant)} contracts")
+
     # Fetch quotes in batches of 200 (Kite limit)
-    token_to_contract = {int(c["instrument_token"]): c for c in relevant}
+    token_to_contract = {str(c["instrument_token"]): c for c in relevant}
     all_tokens = list(token_to_contract.keys())
     quotes = {}
     BATCH = 200
     for i in range(0, len(all_tokens), BATCH):
-        batch_tokens = all_tokens[i:i + BATCH]
+        batch_keys = all_tokens[i:i + BATCH]
         instruments_param = [
-            f"NFO:{token_to_contract[t]['tradingsymbol']}" for t in batch_tokens
+            f"NFO:{token_to_contract[t]['tradingsymbol']}" for t in batch_keys
         ]
         try:
             raw = kite.quote(instruments_param)
             quotes.update(raw)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Kite OC] Quote batch failed: {e}")
 
     # Get spot price
-    spot = get_ltp(nfo_name, "NSE") or 0
+    spot_sym_map = {"NIFTY": "NIFTY 50", "BANKNIFTY": "BANK NIFTY",
+                    "FINNIFTY": "FIN NIFTY", "MIDCPNIFTY": "MIDCAP SELECT"}
+    spot = get_ltp(spot_sym_map.get(nfo_name, nfo_name), "NSE") or 0
+
+    # Convert expiry "YYYY-MM-DD" → "DD-MON-YYYY" for NSE format
+    def _fmt_expiry(e_str):
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(e_str, "%Y-%m-%d").strftime("%d-%b-%Y").upper()
+        except Exception:
+            return e_str
+
+    expiry_fmt = _fmt_expiry(target_expiry)
 
     # Build NSE-compatible records
     strike_map: Dict[float, dict] = {}
-    expiry_fmt = target_expiry.strftime("%d-%b-%Y").upper() if hasattr(target_expiry, "strftime") else str(target_expiry)
-
     for token, contract in token_to_contract.items():
-        strike = float(contract.get("strike", 0))
-        opt_type = contract.get("instrument_type", "")  # "CE" or "PE"
+        strike = float(contract.get("strike") or 0)
+        opt_type = (contract.get("instrument_type") or "").strip().upper()
         ts_key = f"NFO:{contract['tradingsymbol']}"
         q = quotes.get(ts_key, {})
-        ohlc = q.get("ohlc", {})
         depth = q.get("depth", {})
 
         entry = {
@@ -727,20 +808,22 @@ def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]
             "lastPrice": q.get("last_price", 0),
             "totalTradedVolume": q.get("volume", 0),
             "impliedVolatility": 0,
-            "bidprice": (depth.get("buy", [{}]) or [{}])[0].get("price", 0),
-            "askprice": (depth.get("sell", [{}]) or [{}])[0].get("price", 0),
+            "bidprice": ((depth.get("buy") or [{}])[0] or {}).get("price", 0),
+            "askprice": ((depth.get("sell") or [{}])[0] or {}).get("price", 0),
         }
 
         if strike not in strike_map:
             strike_map[strike] = {"strikePrice": strike, "expiryDate": expiry_fmt}
         strike_map[strike][opt_type] = entry
 
-    records_data = sorted(strike_map.values(), key=lambda r: r["strikePrice"])
-    expiry_dates_fmt = [
-        e.strftime("%d-%b-%Y").upper() if hasattr(e, "strftime") else str(e)
-        for e in sorted_expiries
-    ]
+    if not strike_map:
+        print(f"[Kite OC] No quotes returned for {nfo_name}")
+        return None
 
+    records_data = sorted(strike_map.values(), key=lambda r: r["strikePrice"])
+    expiry_dates_fmt = [_fmt_expiry(e) for e in sorted_expiries]
+
+    print(f"[Kite OC] Built option chain: {len(records_data)} strikes, spot={spot}")
     return {
         "records": {
             "expiryDates": expiry_dates_fmt,
