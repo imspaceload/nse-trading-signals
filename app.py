@@ -1,5 +1,5 @@
 import streamlit as st
-import streamlit.components.v1 as components
+import streamlit.components.v1
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 import pytz
@@ -526,7 +526,7 @@ with center_col:
   }});
 }})();
 </script>"""
-    components.html(tv_html, height=468, scrolling=False)
+    st.components.v1.html(tv_html, height=468, scrolling=False)
 
     # ── Indicators row ──
     if data_ok and rsi_d:
