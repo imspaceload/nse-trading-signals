@@ -367,7 +367,10 @@ def get_candles_for_symbol(symbol: str, period: str = "5d",
     period: "1d", "5d", "1mo"
     interval: "1", "5", "15", "25", "60" (minutes)
     """
-    sec_id = get_security_id(symbol, exchange_segment)
+    if exchange_segment == "IDX_I":
+        sec_id = get_index_security_id(symbol)
+    else:
+        sec_id = get_security_id(symbol, exchange_segment)
     if sec_id is None:
         print(f"[Dhan] Security ID not found for {symbol} on {exchange_segment}")
         return pd.DataFrame()

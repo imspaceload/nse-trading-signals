@@ -280,10 +280,12 @@ def get_option_chain_nse_direct(symbol_nse: str) -> Optional[dict]:
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={sym}"
     else:
         url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sym}"
+    print(f"[NSE] Fetching OC: {url}")
     data = _nse(url, timeout=10)
     if data and "records" in data:
+        print(f"[NSE] OC OK for {sym} — {len(data['records'].get('data',[]))} rows")
         return data
-
+    print(f"[NSE] OC failed for {sym} — response keys: {list(data.keys()) if isinstance(data, dict) else data}")
     return None
 
 
