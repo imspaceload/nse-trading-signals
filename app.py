@@ -209,13 +209,22 @@ def _load_wl_prices(symbols_tuple):
         except Exception:
             return name, None
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-        futs = [ex.submit(_f, n) for n in symbols_tuple]
-        for fut in concurrent.futures.as_completed(futs, timeout=10):
-            try:
-                n, p = fut.result()
-                results[n] = p
-            except Exception:
-                pass
+        futs = {ex.submit(_f, n): n for n in symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=15):
+                try:
+                    n, p = fut.result()
+                    results[n] = p
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            for fut, name in futs.items():
+                if fut.done():
+                    try:
+                        n, p = fut.result()
+                        results[n] = p
+                    except Exception:
+                        pass
     return results
 
 @st.cache_data(ttl=300)
@@ -228,13 +237,22 @@ def _load_sparklines(symbols_tuple):
         except Exception:
             return name, []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        futs = [ex.submit(_f, n) for n in symbols_tuple]
-        for fut in concurrent.futures.as_completed(futs, timeout=15):
-            try:
-                n, pts = fut.result()
-                results[n] = pts
-            except Exception:
-                pass
+        futs = {ex.submit(_f, n): n for n in symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=15):
+                try:
+                    n, pts = fut.result()
+                    results[n] = pts
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            for fut, name in futs.items():
+                if fut.done():
+                    try:
+                        n, pts = fut.result()
+                        results[n] = pts
+                    except Exception:
+                        pass
     return results
 
 @st.cache_data(ttl=20 if _mkt_open_now else 300)
