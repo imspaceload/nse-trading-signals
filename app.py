@@ -92,6 +92,11 @@ st.set_page_config(
 if "kite_restore_attempted" not in st.session_state:
     st.session_state.kite_restore_attempted = True
     zerodha_api.restore_saved_token()
+    # Pre-warm NFO instruments in background so option chain is ready immediately
+    import concurrent.futures as _cf
+    _cf.ThreadPoolExecutor(max_workers=1).submit(
+        lambda: zerodha_api.get_option_chain_kite("NIFTY")  # warms _nfo_cache for all underlyings
+    )
 
 # Handle Zerodha OAuth redirect: ?request_token=xxx&action=login
 _qp = st.query_params
