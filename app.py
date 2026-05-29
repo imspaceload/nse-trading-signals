@@ -338,8 +338,8 @@ with left_col:
             add_to_watchlist(d)
         saved_watchlist = get_watchlist()
 
-    wl_prices    = _load_wl_prices(tuple(saved_watchlist))   if saved_watchlist else {}
-    wl_sparklines = _load_sparklines(tuple(saved_watchlist)) if saved_watchlist else {}
+    wl_prices = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
+    wl_sparklines = {}
 
     st.markdown('<div style="padding:5px 8px;border-bottom:1px solid #2a2a4a;"><span style="color:#6b7280;font-size:0.56em;text-transform:uppercase;letter-spacing:1px;font-weight:600;">WATCHLIST</span></div>', unsafe_allow_html=True)
 
@@ -358,17 +358,14 @@ with left_col:
         nse_s     = sym_info.get("nse", wl_name)
         disp      = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name))[0]
         full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1]
-        p         = wl_prices.get(wl_name)
-        spark_pts = wl_sparklines.get(wl_name, [])
+        p = wl_prices.get(wl_name)
         if p:
-            prev = spark_pts[0] if spark_pts else p
-            pct_chg = round((p - prev) / prev * 100, 2) if prev else 0
             price_str = f"{p:,.2f}"
-            pct_str   = f"{'+'if pct_chg>=0 else ''}{pct_chg:.2f}%"
-            clr = _pct_color(pct_chg)
+            pct_str   = ""
+            clr = "#4caf50"
         else:
-            price_str, pct_str, clr = "--", "--", "#6b7280"
-        spark_svg = make_sparkline(spark_pts, color=clr) if spark_pts else ""
+            price_str, pct_str, clr = "--", "", "#6b7280"
+        spark_svg = ""
         is_active = (wl_name == active_sym_key)
         left_bar  = "3px solid #387ed1" if is_active else "3px solid transparent"
         row_bg    = "rgba(56,126,209,0.06)" if is_active else "transparent"
