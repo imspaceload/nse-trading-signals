@@ -553,7 +553,8 @@ with center_col:
             height=452,
         )
         st.plotly_chart(_fig, use_container_width=True,
-                        config={"displayModeBar": False, "scrollZoom": True})
+                        config={"displayModeBar": False, "scrollZoom": True},
+                        key="main_chart")
     else:
         st.markdown(
             '<div style="height:452px;background:#131722;border-radius:8px;'
@@ -882,6 +883,7 @@ with tab_sms:
                     st.rerun()
 
     st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin:8px 0 12px;"></div>', unsafe_allow_html=True)
+    if kite_live:
         try:
             profile = zerodha_api.get_profile()
             margins = zerodha_api.get_margins()
