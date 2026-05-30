@@ -5,6 +5,7 @@ import pytz
 import concurrent.futures
 import pandas as pd
 import os
+import urllib.parse
 
 import zerodha_api
 
@@ -77,6 +78,17 @@ _qp = st.query_params
 if _qp.get("action") == "login" and _qp.get("request_token"):
     if zerodha_api.complete_login(_qp["request_token"]):
         st.session_state["kite_just_connected"] = True
+    st.query_params.clear()
+    st.rerun()
+
+# Watchlist click handlers
+if _qp.get("wl_select"):
+    st.session_state.active_symbol = urllib.parse.unquote_plus(_qp["wl_select"])
+    st.query_params.clear()
+    st.rerun()
+if _qp.get("wl_delete"):
+    from sms_sender import remove_from_watchlist as _rm_wl
+    _rm_wl(urllib.parse.unquote_plus(_qp["wl_delete"]))
     st.query_params.clear()
     st.rerun()
 
@@ -262,6 +274,35 @@ def _load_wl_prices(symbols_tuple):
                         pass
     return results
 
+@st.cache_data(ttl=60 if _mkt_open_now else 600)
+def _load_wl_changes(symbols_tuple):
+    """Fetch day % change for watchlist symbols via yfinance fast_info."""
+    results = {}
+    def _f(name):
+        sym = SYMBOLS.get(name, _make_sym(name))
+        try:
+            import yfinance as yf
+            fi = yf.Ticker(sym["yf"]).fast_info
+            raw = getattr(fi, "regularMarketChangePercent", None)
+            if raw is not None:
+                return name, round(float(raw), 2)
+        except Exception:
+            pass
+        return name, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_f, n): n for n in symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=12):
+                try:
+                    n, pct = fut.result()
+                    results[n] = pct
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            pass
+    return results
+
+
 @st.cache_data(ttl=300)
 def _load_sparklines(symbols_tuple):
     results = {}
@@ -360,12 +401,29 @@ left_col, center_col, right_col = st.columns([4, 14, 7])
 # ══════════════════════════════════════════════
 with left_col:
     st.markdown(f"""
-<div style="padding:9px 10px 7px;border-bottom:1px solid #2a2a4a;background:#141428;">
-  <span style="color:#e8e8e8;font-size:0.95em;font-weight:700;">Options Terminal</span><br>
-  <span style="color:#4b5563;font-size:0.6em;">NSE · BSE · MCX &nbsp;
-  <span style="color:{mkt_color};font-weight:700;">{mkt_text}</span> &nbsp;
-  <span style="color:#f59e0b;">{get_market_opens_in()}</span></span>
+<div style="padding:8px 10px 6px;border-bottom:1px solid #2a2a4a;background:#141428;">
+  <span style="color:#e8e8e8;font-size:0.9em;font-weight:700;">Options Terminal</span>
+  <span style="margin-left:8px;background:{mkt_color}22;color:{mkt_color};
+               padding:1px 7px;border-radius:10px;font-size:0.55em;font-weight:700;">
+    ● {mkt_text}
+  </span>
 </div>""", unsafe_allow_html=True)
+
+    # Search bar (always visible at top)
+    sym_search = st.text_input(
+        "Search", placeholder="🔍  Search eg. NIFTY, RELIANCE...",
+        key="wl_search", label_visibility="collapsed",
+    )
+    if sym_search.strip():
+        candidates = _find_symbol_candidates(sym_search.strip())
+        if len(candidates) == 1:
+            add_to_watchlist(candidates[0])
+            st.session_state.active_symbol = candidates[0]; st.rerun()
+        elif candidates:
+            sel = st.selectbox("Select", candidates, key="search_pick", label_visibility="collapsed")
+            if st.button("Add & Load", key="load_search", use_container_width=True, type="primary"):
+                add_to_watchlist(sel)
+                st.session_state.active_symbol = sel; st.rerun()
 
     saved_watchlist = get_watchlist()
     if not saved_watchlist:
@@ -373,50 +431,67 @@ with left_col:
             add_to_watchlist(d)
         saved_watchlist = get_watchlist()
 
-    wl_prices = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
-    wl_sparklines = {}
+    wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
+    wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
 
-    st.markdown('<div style="padding:5px 8px;border-bottom:1px solid #2a2a4a;"><span style="color:#6b7280;font-size:0.56em;text-transform:uppercase;letter-spacing:1px;font-weight:600;">WATCHLIST</span></div>', unsafe_allow_html=True)
+    # Override index % change with already-loaded indices_data (more up-to-date)
+    _idx_pct_keys = {
+        "NIFTY 50": "NIFTY 50", "BANK NIFTY": "BANK NIFTY",
+        "FIN NIFTY": "FIN NIFTY", "MIDCAP SELECT": "MIDCAP SELECT", "INDIA VIX": "INDIA VIX",
+    }
+    for _ik, _iv in _idx_pct_keys.items():
+        if _iv in indices_data and indices_data[_iv].get("pct") is not None:
+            wl_changes[_ik] = indices_data[_iv]["pct"]
 
-    sym_search = st.text_input("Search", placeholder="Search eg. NIFTY, RELIANCE...", key="wl_search", label_visibility="collapsed")
-    if sym_search.strip():
-        candidates = _find_symbol_candidates(sym_search.strip())
-        if len(candidates) == 1:
-            st.session_state.active_symbol = candidates[0]; st.rerun()
-        elif candidates:
-            sel = st.selectbox("Select", candidates, key="search_pick", label_visibility="collapsed")
-            if st.button("Load", key="load_search", use_container_width=True):
-                st.session_state.active_symbol = sel; st.rerun()
+    st.markdown('<div style="padding:4px 10px 3px;border-bottom:1px solid #1e1e2e;">'
+                '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
+                '</div>', unsafe_allow_html=True)
 
+    rows_html = ""
     for wl_name in saved_watchlist:
-        sym_info  = SYMBOLS.get(wl_name, {})
-        nse_s     = sym_info.get("nse", wl_name)
-        disp      = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name))[0]
-        full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1]
-        p = wl_prices.get(wl_name)
+        full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name
+        p   = wl_prices.get(wl_name)
+        pct = wl_changes.get(wl_name)
         price_str = f"{p:,.2f}" if p else "--"
-        price_clr = "#e8e8e8" if p else "#4b5563"
         is_active = (wl_name == active_sym_key)
-        left_bar  = "3px solid #387ed1" if is_active else "3px solid transparent"
-        row_bg    = "rgba(56,126,209,0.08)" if is_active else "transparent"
-        name_clr  = "#387ed1" if is_active else "#9ca3af"
 
-        r_cols = st.columns([11, 1])
-        with r_cols[0]:
-            if st.button(disp, key=f"wl_{wl_name}", use_container_width=True):
-                st.session_state._wl_selected = wl_name; st.rerun()
-        with r_cols[1]:
-            if st.button("×", key=f"wl_del_{wl_name}"):
-                remove_from_watchlist(wl_name); st.rerun()
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:1px 6px 7px;border-left:{left_bar};background:{row_bg};margin-top:-4px;">'
-            f'<span style="color:{name_clr};font-size:0.6em;">{full_name}</span>'
-            f'<span style="color:{price_clr};font-size:0.75em;font-weight:600;">{price_str}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        # Colour logic
+        if pct is not None:
+            clr = "#4caf50" if pct >= 0 else "#ef4444"
+            arrow = "▲" if pct >= 0 else "▼"
+            pct_html = (f'<div style="color:{clr};font-size:0.58em;margin-top:1px;">'
+                        f'{arrow} {abs(pct):.2f}%</div>')
+        else:
+            clr = "#e8e8e8" if p else "#4b5563"
+            pct_html = ""
 
+        left_brd = "border-left:3px solid #387ed1;" if is_active else "border-left:3px solid transparent;"
+        row_bg   = "background:rgba(56,126,209,0.07);" if is_active else ""
+        name_clr = "#60a5fa" if is_active else "#e8e8e8"
+
+        sel_href = "?wl_select=" + urllib.parse.quote_plus(wl_name)
+        del_href = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
+
+        rows_html += f"""
+<div style="{left_brd}{row_bg}display:flex;align-items:stretch;border-bottom:1px solid rgba(42,42,74,0.45);">
+  <a href="{sel_href}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;
+            align-items:center;padding:8px 8px 8px 9px;">
+    <div>
+      <div style="color:{name_clr};font-size:0.78em;font-weight:600;line-height:1.25;">{full_name}</div>
+      <div style="color:#374151;font-size:0.55em;margin-top:1px;">NSE</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="color:{clr};font-size:0.8em;font-weight:700;">{price_str}</div>
+      {pct_html}
+    </div>
+  </a>
+  <a href="{del_href}" title="Remove" style="color:#374151;font-size:0.72em;padding:6px 7px;
+            text-decoration:none;display:flex;align-items:center;">✕</a>
+</div>"""
+
+    st.markdown(rows_html, unsafe_allow_html=True)
+
+    # Manual add / remove
     wl_input = st.text_input("Add", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
     if wl_input.strip():
         inp = wl_input.strip()
