@@ -447,61 +447,42 @@ with left_col:
                 '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
                 '</div>', unsafe_allow_html=True)
 
-    rows_html = ""
+    import html as _html
+    rows_html = '<div style="overflow:hidden;">'
     for wl_name in saved_watchlist:
-        import html as _html
-        full_name = _html.escape(SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name)
-        p   = wl_prices.get(wl_name)
-        pct = wl_changes.get(wl_name)
-        price_str = f"{p:,.2f}" if p else "--"
-        is_active = (wl_name == active_sym_key)
+        fn   = _html.escape(SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name)
+        p    = wl_prices.get(wl_name)
+        pct  = wl_changes.get(wl_name)
+        ps   = f"{p:,.2f}" if p else "--"
+        act  = wl_name == active_sym_key
 
-        # Colour + change display (Zerodha style: "38.50 (1.72%)")
         if pct is not None:
-            clr = "#4caf50" if pct >= 0 else "#ef4444"
-            arrow_svg = (
-                '<svg width="10" height="10" viewBox="0 0 10 10">'
-                f'<polygon points="5,1 9,9 1,9" fill="{clr}"/></svg>'
-                if pct >= 0 else
-                '<svg width="10" height="10" viewBox="0 0 10 10">'
-                f'<polygon points="1,1 9,1 5,9" fill="{clr}"/></svg>'
-            )
-            abs_chg = abs(round(p * pct / 100, 2)) if p else 0
-            sign    = "+" if pct >= 0 else "-"
-            chg_html = (
-                f'<div style="color:{clr};font-size:0.62em;margin-top:2px;">'
-                f'{sign}{abs_chg:,.2f} ({abs(pct):.2f}%)</div>'
-            )
+            clr  = "#4caf50" if pct >= 0 else "#ef4444"
+            arr  = "▲" if pct >= 0 else "▼"
+            acv  = abs(round(p * pct / 100, 2)) if p else 0
+            sgn  = "+" if pct >= 0 else "-"
+            sub  = f'<span style="color:{clr};font-size:0.6em;">{sgn}{acv:,.2f} ({abs(pct):.2f}%)</span>'
         else:
-            clr, arrow_svg, chg_html = "#9ca3af", "", ""
+            clr, arr, sub = "#9ca3af", "", ""
 
-        left_brd = "border-left:3px solid #387ed1;" if is_active else "border-left:3px solid transparent;"
-        row_bg   = "background:rgba(56,126,209,0.07);" if is_active else ""
-        name_clr = "#60a5fa" if is_active else "#e8e8e8"
+        bdr  = "border-left:3px solid #387ed1;" if act else "border-left:3px solid transparent;"
+        bg   = "background:rgba(56,126,209,0.07);" if act else ""
+        nc   = "#60a5fa" if act else "#e8e8e8"
+        sel  = "?wl_select=" + urllib.parse.quote_plus(wl_name)
+        dl   = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
 
-        sel_href = "?wl_select=" + urllib.parse.quote_plus(wl_name)
-        del_href = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
-
-        rows_html += f"""
-<div style="{left_brd}{row_bg}display:flex;align-items:stretch;border-bottom:1px solid rgba(42,42,74,0.35);">
-  <a href="{sel_href}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;
-            align-items:center;padding:9px 8px 9px 9px;cursor:pointer;">
-    <div>
-      <div style="color:{name_clr};font-size:0.82em;font-weight:600;line-height:1.3;">{full_name}</div>
-      <div style="color:#4b5563;font-size:0.58em;margin-top:2px;">NSE</div>
-    </div>
-    <div style="text-align:right;">
-      <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;">
-        <span style="color:{clr};font-size:0.85em;font-weight:700;">{price_str}</span>
-        {arrow_svg}
-      </div>
-      {chg_html}
-    </div>
-  </a>
-  <a href="{del_href}" title="Remove" style="color:#2a2a4a;font-size:0.8em;padding:0 8px;
-            text-decoration:none;display:flex;align-items:center;transition:color 0.15s;">✕</a>
-</div>"""
-
+        # Single-line compact HTML — no blank lines so Markdown parser won't escape closing tags
+        rows_html += (
+            f'<div style="{bdr}{bg}display:flex;border-bottom:1px solid rgba(42,42,74,0.35);">'
+            f'<a href="{sel}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;align-items:center;padding:9px 8px 9px 9px;">'
+            f'<div><span style="display:block;color:{nc};font-size:0.82em;font-weight:600;">{fn}</span>'
+            f'<span style="color:#4b5563;font-size:0.57em;">NSE</span></div>'
+            f'<div style="text-align:right;"><span style="color:{clr};font-size:0.82em;font-weight:700;">{ps} {arr}</span><br>{sub}</div>'
+            f'</a>'
+            f'<a href="{dl}" style="color:#2d3748;font-size:0.75em;padding:0 8px;text-decoration:none;display:flex;align-items:center;">&#x2715;</a>'
+            f'</div>'
+        )
+    rows_html += '</div>'
     st.markdown(rows_html, unsafe_allow_html=True)
 
     # Manual add / remove
