@@ -56,12 +56,11 @@ def _get_nse_session() -> requests.Session:
     return _nse_session
 
 def _nse(url: str, timeout: int = 10) -> Optional[dict]:
+    global _nse_session, _nse_session_warmed
     try:
         s = _get_nse_session()
         r = s.get(url, timeout=timeout)
-        if r.status_code == 401 or r.status_code == 403:
-            # Cookie expired — recreate session and retry once
-            global _nse_session, _nse_session_warmed
+        if r.status_code in (401, 403):
             _nse_session = None
             _nse_session_warmed = False
             s = _get_nse_session()
@@ -70,7 +69,6 @@ def _nse(url: str, timeout: int = 10) -> Optional[dict]:
         return r.json()
     except Exception as e:
         print(f"[NSE] Request failed {url}: {e}")
-        global _nse_session
         _nse_session = None
         return None
 
