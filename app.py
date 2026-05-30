@@ -511,31 +511,63 @@ with center_col:
         if new_tf != st.session_state.chart_tf:
             st.session_state.chart_tf = new_tf; st.cache_data.clear(); st.rerun()
 
-    # ── TradingView Widget (iframe embed — reliable across all symbols) ──
-    tv_sym = active_sym.get("tv", f"NSE:{active_sym.get('nse', active_sym_key)}")
-    tv_int = _TV_INT.get(st.session_state.chart_tf, "5")
+    # ── Lightweight Charts (TradingView open-source, renders from our own data) ──
+    import json as _json
 
-    from urllib.parse import quote as _uq
-    tv_url = (
-        "https://www.tradingview.com/widgetembed/"
-        f"?symbol={_uq(tv_sym)}"
-        f"&interval={tv_int}"
-        "&theme=dark&style=1&locale=in"
-        "&timezone=Asia%2FKolkata"
-        "&toolbarbg=131722"
-        "&hidesidetoolbar=0"
-        "&symboledit=1"
-        "&withdateranges=1"
-        "&saveimage=0"
-        "&studies=Volume%40tv-basicstudies"
-    )
-    tv_html = (
-        '<div style="background:#131722;border-radius:8px;overflow:hidden;height:460px;">'
-        f'<iframe src="{tv_url}" style="width:100%;height:460px;border:none;" '
-        'frameborder="0" allowtransparency="true" scrolling="no"></iframe>'
-        '</div>'
-    )
-    st.components.v1.html(tv_html, height=468, scrolling=False)
+    def _render_lwc(df: "pd.DataFrame", last_price: float) -> str:
+        if df is None or df.empty:
+            return '<div style="height:460px;background:#131722;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:0.85em;">Fetching chart data...</div>'
+        candles, volumes = [], []
+        for ts, row in df.iterrows():
+            try:
+                t = int(pd.Timestamp(ts).timestamp())
+            except Exception:
+                continue
+            o, h, l, c = float(row["Open"]), float(row["High"]), float(row["Low"]), float(row["Close"])
+            v = float(row.get("Volume", 0) or 0)
+            if any(x != x for x in [o, h, l, c]):  # NaN check
+                continue
+            candles.append({"time": t, "open": o, "high": h, "low": l, "close": c})
+            volumes.append({"time": t, "value": v,
+                            "color": "rgba(76,175,80,0.35)" if c >= o else "rgba(244,67,54,0.35)"})
+        if not candles:
+            return '<div style="height:460px;background:#131722;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:0.85em;">No chart data</div>'
+        candles.sort(key=lambda x: x["time"])
+        volumes.sort(key=lambda x: x["time"])
+        cj = _json.dumps(candles)
+        vj = _json.dumps(volumes)
+        lp = last_price or candles[-1]["close"]
+        return f"""
+<div id="lwc_wrap" style="width:100%;height:460px;background:#131722;border-radius:8px;overflow:hidden;"></div>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function(){{
+  var el=document.getElementById('lwc_wrap');
+  var chart=LightweightCharts.createChart(el,{{
+    width:el.clientWidth,height:460,
+    layout:{{background:{{type:'solid',color:'#131722'}},textColor:'#9ca3af',fontSize:11}},
+    grid:{{vertLines:{{color:'#1a1a2e'}},horzLines:{{color:'#1a1a2e'}}}},
+    crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
+    rightPriceScale:{{borderColor:'#2a2a4a',scaleMargins:{{top:0.05,bottom:0.2}}}},
+    timeScale:{{borderColor:'#2a2a4a',timeVisible:true,secondsVisible:false,fixLeftEdge:true}},
+  }});
+  var cs=chart.addCandlestickSeries({{
+    upColor:'#4caf50',downColor:'#ef4444',
+    borderUpColor:'#4caf50',borderDownColor:'#ef4444',
+    wickUpColor:'#4caf50',wickDownColor:'#ef4444',
+  }});
+  var vs=chart.addHistogramSeries({{priceFormat:{{type:'volume'}},priceScaleId:'vol'}});
+  chart.priceScale('vol').applyOptions({{scaleMargins:{{top:0.82,bottom:0}}}});
+  cs.setData({cj});
+  vs.setData({vj});
+  cs.createPriceLine({{price:{lp},color:'#387ed1',lineWidth:1,lineStyle:2,axisLabelVisible:true}});
+  chart.timeScale().fitContent();
+  new ResizeObserver(function(){{chart.applyOptions({{width:el.clientWidth}})}}).observe(el);
+}})();
+</script>"""
+
+    chart_html = _render_lwc(df, spot_price or 0)
+    st.components.v1.html(chart_html, height=468, scrolling=False)
 
     # ── Indicators row ──
     if data_ok and rsi_d:

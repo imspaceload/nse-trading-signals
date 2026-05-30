@@ -26,26 +26,50 @@ _NSE_HDRS = {
 }
 
 _nse_session: Optional[requests.Session] = None
+_nse_session_warmed: bool = False
+
+def _warm_nse_session(s: requests.Session) -> bool:
+    """Visit NSE pages to collect cookies needed for API calls."""
+    warmup_urls = [
+        "https://www.nseindia.com",
+        "https://www.nseindia.com/market-data/live-equity-market",
+        "https://www.nseindia.com/option-chain",
+    ]
+    for url in warmup_urls:
+        try:
+            r = s.get(url, timeout=10)
+            if r.status_code == 200:
+                pass
+        except Exception:
+            pass
+    return bool(s.cookies)
 
 def _get_nse_session() -> requests.Session:
-    global _nse_session
+    global _nse_session, _nse_session_warmed
     if _nse_session is None:
         s = requests.Session()
         s.headers.update(_NSE_HDRS)
-        try:
-            s.get("https://www.nseindia.com", timeout=8)
-        except Exception:
-            pass
+        _warm_nse_session(s)
         _nse_session = s
+        _nse_session_warmed = True
+        print(f"[NSE] Session created, cookies: {list(s.cookies.keys())}")
     return _nse_session
 
 def _nse(url: str, timeout: int = 10) -> Optional[dict]:
     try:
         s = _get_nse_session()
         r = s.get(url, timeout=timeout)
+        if r.status_code == 401 or r.status_code == 403:
+            # Cookie expired — recreate session and retry once
+            global _nse_session, _nse_session_warmed
+            _nse_session = None
+            _nse_session_warmed = False
+            s = _get_nse_session()
+            r = s.get(url, timeout=timeout)
         r.raise_for_status()
         return r.json()
-    except Exception:
+    except Exception as e:
+        print(f"[NSE] Request failed {url}: {e}")
         global _nse_session
         _nse_session = None
         return None
