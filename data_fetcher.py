@@ -285,6 +285,17 @@ def get_sparkline_data(yf_symbol: str, n: int = 18) -> List[float]:
 def get_option_chain_nse_direct(symbol_nse: str) -> Optional[dict]:
     sym = symbol_nse.strip().upper()
 
+    # 0. Kite Connect — works from any IP when token is valid
+    try:
+        from kite_api import get_option_chain_kite, is_connected as _kite_ok
+        if _kite_ok():
+            data = get_option_chain_kite(sym)
+            if data and "records" in data:
+                print(f"[Kite] OC OK for {sym} — {len(data['records'].get('data', []))} strikes")
+                return data
+    except Exception as e:
+        print(f"[Kite] OC attempt failed: {e}")
+
     # 1. Dhan — dedicated endpoint, works from any IP
     try:
         from dhan_api import get_option_chain_for_symbol, _is_configured, _convert_dhan_oc_to_nse
