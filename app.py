@@ -393,7 +393,7 @@ st.markdown(f"""
 # ═══════════════════════════════════════════════
 #  3-COLUMN LAYOUT: Left | Center | Right
 # ═══════════════════════════════════════════════
-left_col, center_col, right_col = st.columns([4, 14, 7])
+left_col, main_col = st.columns([5, 20])
 
 
 # ══════════════════════════════════════════════
@@ -474,7 +474,7 @@ with left_col:
         # Single-line compact HTML — no blank lines so Markdown parser won't escape closing tags
         rows_html += (
             f'<div style="{bdr}{bg}display:flex;border-bottom:1px solid rgba(42,42,74,0.35);">'
-            f'<a href="{sel}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;align-items:center;padding:9px 8px 9px 9px;">'
+            f'<a href="{sel}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;align-items:center;padding:10px 8px 10px 14px;">'
             f'<div><span style="display:block;color:{nc};font-size:0.82em;font-weight:600;">{fn}</span>'
             f'<span style="color:#4b5563;font-size:0.57em;">NSE</span></div>'
             f'<div style="text-align:right;"><span style="color:{clr};font-size:0.82em;font-weight:700;">{ps} {arr}</span><br>{sub}</div>'
@@ -497,10 +497,13 @@ with left_col:
             add_to_watchlist(candidates[0] if candidates else sym_to_add); st.rerun()
 
 
+with main_col:
+    _chart_tab, _oc_tab = st.tabs(["📈  Chart", "⛓  Option Chain"])
+
 # ══════════════════════════════════════════════
-#  CENTER: Symbol Header + TV Chart + Indicators
+#  CHART TAB
 # ══════════════════════════════════════════════
-with center_col:
+with _chart_tab:
     spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
@@ -767,11 +770,10 @@ with center_col:
 
 
 # ══════════════════════════════════════════════
-#  RIGHT: Option Chain
+#  OPTION CHAIN TAB
 # ══════════════════════════════════════════════
-with right_col:
+with _oc_tab:
     nse_sym_oc = active_sym.get("nse","")
-    st.markdown('<div style="padding:6px 4px 5px;border-bottom:1px solid #2a2a4a;"><span style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;font-weight:600;">OPTION CHAIN</span></div>', unsafe_allow_html=True)
 
     if not nse_sym_oc:
         st.info("Option chain not available for this instrument.")
@@ -801,22 +803,22 @@ with right_col:
             pcr_c = "#4caf50" if stats["pcr_label"]=="BULLISH" else ("#ef4444" if stats["pcr_label"]=="BEARISH" else "#9ca3af")
 
             st.markdown(f"""
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:7px;">
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">SPOT</div>
-    <div style="color:#e8e8e8;font-size:0.9em;font-weight:700;">{spot_oc:,.0f}</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px;">
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px 10px;">
+    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;letter-spacing:0.5px;">SPOT</div>
+    <div style="color:#e8e8e8;font-size:1em;font-weight:700;">{spot_oc:,.0f}</div>
   </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">PCR</div>
-    <div style="color:{pcr_c};font-size:0.9em;font-weight:700;">{stats["pcr"]}</div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px 10px;">
+    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;letter-spacing:0.5px;">PCR</div>
+    <div style="color:{pcr_c};font-size:1em;font-weight:700;">{stats["pcr"]}</div>
   </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">MAX PAIN</div>
-    <div style="color:#fbbf24;font-size:0.9em;font-weight:700;">{stats["max_pain"]:,}</div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px 10px;">
+    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;letter-spacing:0.5px;">MAX PAIN</div>
+    <div style="color:#fbbf24;font-size:1em;font-weight:700;">{stats["max_pain"]:,}</div>
   </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">SIGNAL</div>
-    <div style="color:{pcr_c};font-size:0.82em;font-weight:600;">{stats["pcr_label"]}</div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px 10px;">
+    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;letter-spacing:0.5px;">SIGNAL</div>
+    <div style="color:{pcr_c};font-size:0.9em;font-weight:600;">{stats["pcr_label"]}</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -842,14 +844,14 @@ with right_col:
             if atm > 0:
                 sorted_s = sorted(all_strikes)
                 ai = sorted_s.index(atm) if atm in sorted_s else len(sorted_s)//2
-                visible = set(sorted_s[max(0,ai-8): ai+9])
+                visible = set(sorted_s[max(0,ai-12): ai+13])
                 chain_rows = [r for r in chain_rows if r["strike"] in visible]
 
             max_ce_oi = max((r["ce_oi"] for r in chain_rows), default=1) or 1
             max_pe_oi = max((r["pe_oi"] for r in chain_rows), default=1) or 1
 
             if chain_rows:
-                tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.7em;">'
+                tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.78em;">'
                 tbl += ('<thead><tr style="background:#1e293b;">'
                         '<th style="padding:3px;color:#22c55e;text-align:right;">CE OI</th>'
                         '<th style="padding:3px;color:#22c55e;text-align:right;">LTP</th>'
