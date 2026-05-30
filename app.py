@@ -613,7 +613,15 @@ with right_col:
     else:
         oc_raw = _load_option_chain(nse_sym_oc)
         if oc_raw is None or "records" not in oc_raw:
-            st.markdown(f'<div style="color:#f59e0b;font-size:0.76em;padding:8px 2px;">⟳ Loading option chain for {nse_sym_oc}...</div>', unsafe_allow_html=True)
+            from dhan_api import _is_configured as _dhan_cfg
+            if not _dhan_cfg():
+                st.markdown(
+                    '<div style="background:#1a1200;border:1px solid #78350f;border-radius:6px;padding:10px;margin:6px 0;">'
+                    '<div style="color:#fbbf24;font-size:0.72em;font-weight:700;">⚠ Dhan Token Expired</div>'
+                    '<div style="color:#9ca3af;font-size:0.68em;margin-top:4px;">Go to <b>SMS Admin → Dhan API Token</b> and paste a fresh token from web.dhan.co</div>'
+                    '</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div style="color:#f59e0b;font-size:0.76em;padding:8px 2px;">⟳ Loading option chain for {nse_sym_oc}...</div>', unsafe_allow_html=True)
             if st.button("Retry", key="oc_retry"):
                 st.cache_data.clear(); st.rerun()
         else:
@@ -830,7 +838,50 @@ with tab_sms:
     if st.session_state.get("kite_just_connected"):
         st.session_state.pop("kite_just_connected", None)
 
-    if kite_live:
+    # ── Dhan Token Update ──────────────────────────────────────────
+    import dhan_api as _dhan
+    _dhan_ok = _dhan._is_configured()
+    _dhan_icon = "🟢" if _dhan_ok else "🔴"
+    with st.expander(f"{_dhan_icon} Dhan API Token {'(Active)' if _dhan_ok else '(Expired / Missing)'}"):
+        st.markdown(
+            '<div style="color:#9ca3af;font-size:0.78em;margin-bottom:8px;">'
+            'Dhan token expires every 24 hours. Go to '
+            '<b>web.dhan.co → Profile → Access Token</b> to get a fresh one.</div>',
+            unsafe_allow_html=True,
+        )
+        new_tok = st.text_area("Paste new access token here:", height=90,
+                               key="dhan_new_tok", label_visibility="collapsed",
+                               placeholder="eyJhbGciOiJIUzUxMiJ9...")
+        if st.button("Update Dhan Token", key="dhan_tok_save", type="primary"):
+            tok = new_tok.strip()
+            if not tok:
+                st.error("Token cannot be empty.")
+            else:
+                os.environ["DHAN_ACCESS_TOKEN"] = tok
+                env_path = "/root/nse-trading-signals/.env"
+                try:
+                    with open(env_path, "r") as f:
+                        lines = f.readlines()
+                    new_lines, found = [], False
+                    for line in lines:
+                        if line.startswith("DHAN_ACCESS_TOKEN="):
+                            new_lines.append(f"DHAN_ACCESS_TOKEN={tok}\n")
+                            found = True
+                        else:
+                            new_lines.append(line)
+                    if not found:
+                        new_lines.append(f"\nDHAN_ACCESS_TOKEN={tok}\n")
+                    with open(env_path, "w") as f:
+                        f.writelines(new_lines)
+                    st.cache_data.clear()
+                    st.success("Token updated! Option chain will reload on next refresh.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Saved to env only (file write failed: {e}). Will reset on restart.")
+                    st.cache_data.clear()
+                    st.rerun()
+
+    st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin:8px 0 12px;"></div>', unsafe_allow_html=True)
         try:
             profile = zerodha_api.get_profile()
             margins = zerodha_api.get_margins()
