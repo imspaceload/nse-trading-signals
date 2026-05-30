@@ -883,6 +883,7 @@ with tab_sms:
                     st.rerun()
 
     st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin:8px 0 12px;"></div>', unsafe_allow_html=True)
+    if kite_live:
         try:
             profile = zerodha_api.get_profile()
             margins = zerodha_api.get_margins()
