@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 import pytz
@@ -511,63 +510,57 @@ with center_col:
         if new_tf != st.session_state.chart_tf:
             st.session_state.chart_tf = new_tf; st.cache_data.clear(); st.rerun()
 
-    # ── Lightweight Charts (TradingView open-source, renders from our own data) ──
-    import json as _json
+    # ── Plotly Candlestick Chart (no deprecated APIs) ──
+    import plotly.graph_objects as go
 
-    def _render_lwc(df: "pd.DataFrame", last_price: float) -> str:
-        if df is None or df.empty:
-            return '<div style="height:460px;background:#131722;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:0.85em;">Fetching chart data...</div>'
-        candles, volumes = [], []
-        for ts, row in df.iterrows():
-            try:
-                t = int(pd.Timestamp(ts).timestamp())
-            except Exception:
-                continue
-            o, h, l, c = float(row["Open"]), float(row["High"]), float(row["Low"]), float(row["Close"])
-            v = float(row.get("Volume", 0) or 0)
-            if any(x != x for x in [o, h, l, c]):  # NaN check
-                continue
-            candles.append({"time": t, "open": o, "high": h, "low": l, "close": c})
-            volumes.append({"time": t, "value": v,
-                            "color": "rgba(76,175,80,0.35)" if c >= o else "rgba(244,67,54,0.35)"})
-        if not candles:
-            return '<div style="height:460px;background:#131722;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:0.85em;">No chart data</div>'
-        candles.sort(key=lambda x: x["time"])
-        volumes.sort(key=lambda x: x["time"])
-        cj = _json.dumps(candles)
-        vj = _json.dumps(volumes)
-        lp = last_price or candles[-1]["close"]
-        return f"""
-<div id="lwc_wrap" style="width:100%;height:460px;background:#131722;border-radius:8px;overflow:hidden;"></div>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script>
-(function(){{
-  var el=document.getElementById('lwc_wrap');
-  var chart=LightweightCharts.createChart(el,{{
-    width:el.clientWidth,height:460,
-    layout:{{background:{{type:'solid',color:'#131722'}},textColor:'#9ca3af',fontSize:11}},
-    grid:{{vertLines:{{color:'#1a1a2e'}},horzLines:{{color:'#1a1a2e'}}}},
-    crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
-    rightPriceScale:{{borderColor:'#2a2a4a',scaleMargins:{{top:0.05,bottom:0.2}}}},
-    timeScale:{{borderColor:'#2a2a4a',timeVisible:true,secondsVisible:false,fixLeftEdge:true}},
-  }});
-  var cs=chart.addCandlestickSeries({{
-    upColor:'#4caf50',downColor:'#ef4444',
-    borderUpColor:'#4caf50',borderDownColor:'#ef4444',
-    wickUpColor:'#4caf50',wickDownColor:'#ef4444',
-  }});
-  var vs=chart.addHistogramSeries({{priceFormat:{{type:'volume'}},priceScaleId:'vol'}});
-  chart.priceScale('vol').applyOptions({{scaleMargins:{{top:0.82,bottom:0}}}});
-  cs.setData({cj});
-  vs.setData({vj});
-  cs.createPriceLine({{price:{lp},color:'#387ed1',lineWidth:1,lineStyle:2,axisLabelVisible:true}});
-  chart.timeScale().fitContent();
-  new ResizeObserver(function(){{chart.applyOptions({{width:el.clientWidth}})}}).observe(el);
-}})();
-</script>"""
-
-    chart_html = _render_lwc(df, spot_price or 0)
-    st.components.v1.html(chart_html, height=468, scrolling=False)
+    if data_ok and df is not None and not df.empty:
+        _df = df.copy()
+        _colors = [
+            "rgba(76,175,80,0.45)" if c >= o else "rgba(244,67,54,0.45)"
+            for c, o in zip(_df["Close"], _df["Open"])
+        ]
+        _fig = go.Figure()
+        _fig.add_trace(go.Candlestick(
+            x=_df.index, open=_df["Open"], high=_df["High"],
+            low=_df["Low"], close=_df["Close"], name=active_sym_key,
+            increasing=dict(line=dict(color="#4caf50"), fillcolor="#4caf50"),
+            decreasing=dict(line=dict(color="#ef4444"), fillcolor="#ef4444"),
+            showlegend=False,
+        ))
+        if "Volume" in _df.columns:
+            _fig.add_trace(go.Bar(
+                x=_df.index, y=_df["Volume"], marker_color=_colors,
+                name="Vol", yaxis="y2", showlegend=False,
+            ))
+        if spot_price:
+            _fig.add_hline(y=spot_price, line_dash="dot", line_color="#387ed1", line_width=1)
+        _fig.update_layout(
+            paper_bgcolor="#131722", plot_bgcolor="#131722",
+            font=dict(color="#9ca3af", size=11),
+            xaxis=dict(
+                rangeslider=dict(visible=False), gridcolor="#1a1a2e",
+                showgrid=True, color="#6b7280", tickfont=dict(size=10),
+            ),
+            yaxis=dict(
+                gridcolor="#1a1a2e", side="right", color="#6b7280",
+                tickfont=dict(size=10), domain=[0.22, 1.0],
+            ),
+            yaxis2=dict(
+                overlaying="y", side="right", showgrid=False,
+                showticklabels=False, domain=[0.0, 0.18],
+            ),
+            margin=dict(l=0, r=55, t=8, b=25),
+            height=452,
+        )
+        st.plotly_chart(_fig, use_container_width=True,
+                        config={"displayModeBar": False, "scrollZoom": True})
+    else:
+        st.markdown(
+            '<div style="height:452px;background:#131722;border-radius:8px;'
+            'display:flex;align-items:center;justify-content:center;'
+            'color:#4b5563;font-size:0.85em;">Fetching chart data…</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Indicators row ──
     if data_ok and rsi_d:
