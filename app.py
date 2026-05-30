@@ -501,89 +501,83 @@ with center_col:
             closed = close_trade(t["id"], cur_ltp)
             if closed: send_sms_to_all(closed, action="EXIT")
 
-    # ── Symbol header ──
+    # ── Symbol header + Signal box (always visible) ──
+    pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
     if data_ok:
         day_chg = df["Close"].iloc[-1] - df["Open"].iloc[0]
         day_pct = (day_chg / df["Open"].iloc[0]) * 100
         chg_c = _pct_color(day_pct)
         arrow  = "▲" if day_chg >= 0 else "▼"
         disp_short = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
-        action_pill = (
-            "<div style='background:#1a3a2a;color:#4caf50;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:700;display:inline-block;'>▲ BUY</div>" if action=="BUY" else
-            "<div style='background:#3a1a1a;color:#ef4444;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:700;display:inline-block;'>▼ SELL</div>" if action=="SELL" else
-            "<div style='background:#1a1a2e;color:#9ca3af;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:600;display:inline-block;'>⏸ HOLD</div>"
-        )
+
+        # Signal box config
+        if action == "BUY":
+            _t1, _t2 = pivots.get("R1", 0), pivots.get("R2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("S1", 0)
+            _sig_bg = "linear-gradient(135deg,#0a1f0a 0%,#0d1a0d 100%)"
+            _sig_border, _sig_accent = "#1e4d1e", "#4caf50"
+            _sig_arrow, _sig_label = "▲", "BUY"
+            _sig_msg = f"Buy <b>{disp_short}</b> @ ₹{spot_price:,.2f}"
+        elif action == "SELL":
+            _t1, _t2 = pivots.get("S1", 0), pivots.get("S2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("R1", 0)
+            _sig_bg = "linear-gradient(135deg,#1f0a0a 0%,#1a0d0d 100%)"
+            _sig_border, _sig_accent = "#4d1e1e", "#ef4444"
+            _sig_arrow, _sig_label = "▼", "SELL"
+            _sig_msg = f"Sell <b>{disp_short}</b> @ ₹{spot_price:,.2f}"
+        else:
+            _t1, _t2 = pivots.get("R1", 0), pivots.get("S1", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), 0
+            _sig_bg = "linear-gradient(135deg,#0e0e1a 0%,#12121f 100%)"
+            _sig_border, _sig_accent = "#2a2a4a", "#6b7280"
+            _sig_arrow, _sig_label = "⏸", "HOLD"
+            _sig_msg = f"Watch <b>{disp_short}</b> — no setup yet"
+        _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
+
+        def _lvl(label, val, clr):
+            if not val: return ""
+            return (f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:5px;padding:4px 10px;text-align:center;min-width:62px;">'
+                    f'<div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
+                    f'<div style="color:{clr};font-size:0.8em;font-weight:700;margin-top:1px;">₹{val:,.0f}</div>'
+                    f'</div>')
+
+        _levels_html = "".join([
+            _lvl("T1",  _t1,  "#4caf50"),
+            _lvl("T2",  _t2,  "#22c55e"),
+            _lvl("AVG", _avg, "#fbbf24"),
+            _lvl("SL1", _sl1, "#f97316"),
+            _lvl("SL2", _sl2, "#ef4444"),
+        ])
+
         st.markdown(f"""
-<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:7px 4px 9px;border-bottom:1px solid #2a2a4a;">
-  <div>
-    <div style="display:flex;align-items:baseline;gap:8px;">
-      <span style="color:#e8e8e8;font-size:1.25em;font-weight:700;">{disp_short}</span>
-      <span style="color:#6b7280;font-size:0.7em;">NSE</span>
-    </div>
-    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
-      <span style="color:#e8e8e8;font-size:1.55em;font-weight:700;">{spot_price:,.2f}</span>
-      <span style="color:{chg_c};font-size:0.88em;font-weight:600;">{arrow} {abs(day_chg):,.2f} ({"+" if day_pct>=0 else ""}{day_pct:.2f}%)</span>
-    </div>
+<div style="display:flex;justify-content:space-between;align-items:center;
+            padding:6px 6px 4px;border-bottom:1px solid #2a2a4a;">
+  <div style="display:flex;align-items:baseline;gap:8px;">
+    <span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{disp_short}</span>
+    <span style="color:#4b5563;font-size:0.65em;">NSE</span>
+    <span style="color:#e8e8e8;font-size:1.35em;font-weight:700;">{spot_price:,.2f}</span>
+    <span style="color:{chg_c};font-size:0.8em;font-weight:600;">{arrow} {abs(day_pct):.2f}%</span>
   </div>
-  <div style="text-align:right;padding-top:4px;">
-    <div style="color:#6b7280;font-size:0.6em;">O: {df['Open'].iloc[0]:,.2f} &nbsp; H: {df['High'].max():,.2f} &nbsp; L: {df['Low'].min():,.2f}</div>
-    <div style="margin-top:4px;">{action_pill}</div>
+  <div style="color:#4b5563;font-size:0.58em;">
+    O:{df['Open'].iloc[0]:,.0f} &nbsp;H:{df['High'].max():,.0f} &nbsp;L:{df['Low'].min():,.0f}
+  </div>
+</div>
+<div style="background:{_sig_bg};border:1px solid {_sig_border};border-left:3px solid {_sig_accent};
+            border-radius:6px;padding:8px 10px 8px;margin:5px 0 3px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div>
+      <span style="color:{_sig_accent};font-size:0.65em;font-weight:800;letter-spacing:1px;">{_sig_arrow} {_sig_label}</span>
+      <div style="color:#e8e8e8;font-size:0.9em;font-weight:600;margin-top:2px;">{_sig_msg}</div>
+      <div style="color:#6b7280;font-size:0.58em;margin-top:2px;">
+        Target avg ₹{_avg:,.0f} &nbsp;·&nbsp; PP ₹{pivots.get("PP",0):,.0f}
+      </div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;">{_levels_html}</div>
   </div>
 </div>""", unsafe_allow_html=True)
     else:
         st.markdown(f'<div style="padding:7px 4px 9px;border-bottom:1px solid #2a2a4a;"><span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{active_sym_key}</span> <span style="color:#f59e0b;font-size:0.8em;">⟳ Loading...</span></div>', unsafe_allow_html=True)
-
-    # ── Trade signal box (shown when signal is BUY or SELL) ──
-    pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
-    if data_ok and action in ("BUY", "SELL") and pivots and spot_price:
-        _entry = spot_price
-        if action == "BUY":
-            _t1, _t2 = pivots.get("R1", 0), pivots.get("R2", 0)
-            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("S1", 0)
-            _bg, _border, _accent = "#0a1f0a", "#1a4a1a", "#4caf50"
-            _arrow, _verb = "▲", "BUY"
-        else:
-            _t1, _t2 = pivots.get("S1", 0), pivots.get("S2", 0)
-            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("R1", 0)
-            _bg, _border, _accent = "#1f0a0a", "#4a1a1a", "#ef4444"
-            _arrow, _verb = "▼", "SELL"
-        _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
-        disp_short2 = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
-        st.markdown(f"""
-<div style="background:{_bg};border:1px solid {_border};border-left:3px solid {_accent};
-            border-radius:6px;padding:9px 12px;margin:6px 0 2px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
-    <div>
-      <span style="color:{_accent};font-size:0.72em;font-weight:800;letter-spacing:1px;">{_arrow} {_verb} SIGNAL</span>
-      <div style="color:#e8e8e8;font-size:1.05em;font-weight:700;margin-top:1px;">
-        {_verb} <span style="color:#fbbf24;">{disp_short2}</span>
-        &nbsp;@&nbsp;<span style="color:#e8e8e8;">₹{_entry:,.2f}</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <div style="background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
-        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">T1</div>
-        <div style="color:#4caf50;font-size:0.82em;font-weight:700;">₹{_t1:,.2f}</div>
-      </div>
-      <div style="background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
-        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">T2</div>
-        <div style="color:#4caf50;font-size:0.82em;font-weight:700;">₹{_t2:,.2f}</div>
-      </div>
-      <div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
-        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">AVG</div>
-        <div style="color:#fbbf24;font-size:0.82em;font-weight:700;">₹{_avg:,.2f}</div>
-      </div>
-      <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
-        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SL1</div>
-        <div style="color:#ef4444;font-size:0.82em;font-weight:700;">₹{_sl1:,.2f}</div>
-      </div>
-      <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
-        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SL2</div>
-        <div style="color:#ef4444;font-size:0.82em;font-weight:700;">₹{_sl2:,.2f}</div>
-      </div>
-    </div>
-  </div>
-</div>""", unsafe_allow_html=True)
 
     # ── Timeframe selector ──
     tf_col, _spacer = st.columns([4, 6])
