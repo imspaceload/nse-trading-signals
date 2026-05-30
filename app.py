@@ -553,7 +553,8 @@ with center_col:
             height=452,
         )
         st.plotly_chart(_fig, use_container_width=True,
-                        config={"displayModeBar": False, "scrollZoom": True})
+                        config={"displayModeBar": False, "scrollZoom": True},
+                        key="main_chart")
     else:
         st.markdown(
             '<div style="height:452px;background:#131722;border-radius:8px;'
