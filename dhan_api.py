@@ -35,6 +35,10 @@ def _headers() -> dict:
     }
 
 
+def _is_configured() -> bool:
+    return bool(_get_secret("DHAN_ACCESS_TOKEN"))
+
+
 BASE_URL = "https://api.dhan.co/v2"
 
 # ══════════════════════════════════════════
@@ -363,7 +367,10 @@ def get_candles_for_symbol(symbol: str, period: str = "5d",
     period: "1d", "5d", "1mo"
     interval: "1", "5", "15", "25", "60" (minutes)
     """
-    sec_id = get_security_id(symbol, exchange_segment)
+    if exchange_segment == "IDX_I":
+        sec_id = get_index_security_id(symbol)
+    else:
+        sec_id = get_security_id(symbol, exchange_segment)
     if sec_id is None:
         print(f"[Dhan] Security ID not found for {symbol} on {exchange_segment}")
         return pd.DataFrame()
@@ -406,12 +413,19 @@ def get_candles_for_symbol(symbol: str, period: str = "5d",
 #  OPTION CHAIN
 # ══════════════════════════════════════════
 
+def _seg_to_type(segment: str) -> str:
+    """Map Dhan exchange segment to UnderlyingType for option chain API."""
+    if "IDX" in segment:
+        return "IDX"
+    return "EQUITY"
+
+
 def get_expiry_list(underlying_security_id: int, underlying_segment: str = "IDX_I") -> list:
     """Get list of active expiry dates for an underlying."""
     try:
         body = {
-            "UnderlyingScri": underlying_security_id,
-            "UnderlyingSeg": underlying_segment,
+            "UnderlyingScrip": underlying_security_id,
+            "UnderlyingType": _seg_to_type(underlying_segment),
         }
         resp = requests.post(
             f"{BASE_URL}/optionchain/expirylist",
@@ -436,17 +450,17 @@ def get_option_chain_dhan(underlying_security_id: int,
     """
     try:
         body = {
-            "UnderlyingScri": underlying_security_id,
-            "UnderlyingSeg": underlying_segment,
+            "UnderlyingScrip": underlying_security_id,
+            "UnderlyingType": _seg_to_type(underlying_segment),
         }
         if expiry:
-            body["Expiry"] = expiry
+            body["ExpiryDate"] = expiry
 
         resp = requests.post(
             f"{BASE_URL}/optionchain",
             headers=_headers(),
             json=body,
-            timeout=10,
+            timeout=15,
         )
         resp.raise_for_status()
         return resp.json()
@@ -463,6 +477,10 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
     """
     sym = symbol.strip().upper()
 
+    if not _is_configured():
+        print(f"[Dhan] Not configured — DHAN_ACCESS_TOKEN missing")
+        return None
+
     # Determine underlying security ID and segment
     idx_id = get_index_security_id(sym)
     if idx_id is not None:
@@ -473,11 +491,15 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
         seg = "NSE_EQ"
 
     if sec_id is None:
+        print(f"[Dhan] Security ID not found for {sym}")
         return None
+
+    print(f"[Dhan] OC lookup: sym={sym} sec_id={sec_id} seg={seg} type={_seg_to_type(seg)}")
 
     # Get expiry list if not provided
     if not expiry:
         expiries = get_expiry_list(sec_id, seg)
+        print(f"[Dhan] Expiries for {sym}: {expiries[:3] if expiries else 'NONE'}")
         if expiries:
             expiry = expiries[0]  # nearest expiry
         else:
@@ -486,7 +508,11 @@ def get_option_chain_for_symbol(symbol: str, expiry: str = None) -> dict:
     # Fetch option chain
     oc_data = get_option_chain_dhan(sec_id, seg, expiry)
     if not oc_data:
+        print(f"[Dhan] Empty OC response for {sym} expiry={expiry}")
         return None
+
+    oc_keys = list(oc_data.get("oc", {}).keys())[:3] if "oc" in oc_data else list(oc_data.keys())[:5]
+    print(f"[Dhan] OC response keys: {oc_keys} last_price={oc_data.get('last_price')}")
 
     return {
         "raw": oc_data,
@@ -541,3 +567,102 @@ def resolve_symbol(symbol_name: str, sym_config: dict) -> tuple:
         return (sec_id, "NSE_EQ", "EQUITY")
 
     return (None, None, None)
+
+
+# ══════════════════════════════════════════
+#  NSE FORMAT CONVERTER
+# ══════════════════════════════════════════
+
+def _convert_dhan_oc_to_nse(oc_result: dict) -> dict:
+    """Convert Dhan option chain result to NSE-compatible format for app rendering."""
+    if not oc_result:
+        return {}
+
+    raw = oc_result.get("raw", oc_result)
+    underlying_price = float(oc_result.get("underlying_price", 0) or 0)
+    expiry = oc_result.get("expiry", "")
+    expiry_list = oc_result.get("expiry_list", [])
+
+    # Navigate into "data" wrapper if present
+    data_sec = raw.get("data", raw) if isinstance(raw, dict) else raw
+
+    # Locate the oc dict (keyed by strike price string)
+    oc_dict = (
+        data_sec.get("oc") or data_sec.get("OC") or
+        raw.get("oc") or {}
+    ) if isinstance(data_sec, dict) else {}
+
+    if not oc_dict:
+        return {}
+
+    spot = (
+        underlying_price or
+        (data_sec.get("last_price") if isinstance(data_sec, dict) else 0) or
+        (data_sec.get("lastTradedPrice") if isinstance(data_sec, dict) else 0) or
+        (raw.get("last_price") if isinstance(raw, dict) else 0) or 0
+    )
+
+    def _fmt_exp(e):
+        if not e:
+            return e
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(str(e), "%Y-%m-%d").strftime("%d-%b-%Y").upper()
+        except Exception:
+            return str(e)
+
+    exp_fmt = _fmt_exp(expiry)
+    expiry_list_fmt = [_fmt_exp(e) for e in expiry_list] if expiry_list else ([exp_fmt] if exp_fmt else [])
+
+    def _pick(*keys, d):
+        for k in keys:
+            v = d.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except Exception:
+                    pass
+        return 0.0
+
+    records = []
+    for strike_key, sd in oc_dict.items():
+        try:
+            strike = float(strike_key)
+        except (ValueError, TypeError):
+            continue
+
+        ce = {
+            "openInterest":         int(_pick("call_oi",  "callOI",   "ce_oi",  d=sd)),
+            "changeinOpenInterest": int(_pick("call_oiChange", "callOIChange", d=sd)),
+            "totalTradedVolume":    int(_pick("call_vol", "call_volume", "callVol", d=sd)),
+            "impliedVolatility":    _pick("call_iv", "callIV", d=sd),
+            "lastPrice":            _pick("call_ltp", "callLTP", d=sd),
+            "bidprice":             _pick("call_bid", "callBid", "topCallBid", d=sd),
+            "askprice":             _pick("call_ask", "callAsk", "topCallAsk", d=sd),
+            "expiryDate": exp_fmt, "strikePrice": strike,
+        }
+        pe = {
+            "openInterest":         int(_pick("put_oi",  "putOI",  "pe_oi",  d=sd)),
+            "changeinOpenInterest": int(_pick("put_oiChange", "putOIChange", d=sd)),
+            "totalTradedVolume":    int(_pick("put_vol", "put_volume", "putVol", d=sd)),
+            "impliedVolatility":    _pick("put_iv", "putIV", d=sd),
+            "lastPrice":            _pick("put_ltp", "putLTP", d=sd),
+            "bidprice":             _pick("put_bid", "putBid", "topPutBid", d=sd),
+            "askprice":             _pick("put_ask", "putAsk", "topPutAsk", d=sd),
+            "expiryDate": exp_fmt, "strikePrice": strike,
+        }
+        records.append({"strikePrice": strike, "expiryDate": exp_fmt, "CE": ce, "PE": pe})
+
+    if not records:
+        return {}
+
+    records.sort(key=lambda r: r["strikePrice"])
+    return {
+        "records": {
+            "expiryDates": expiry_list_fmt,
+            "data": records,
+            "underlyingValue": float(spot),
+            "strikePrices": [r["strikePrice"] for r in records],
+        },
+        "_source": "dhan",
+    }
