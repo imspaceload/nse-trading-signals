@@ -5,6 +5,7 @@ import pytz
 import concurrent.futures
 import pandas as pd
 import os
+import urllib.parse
 
 import zerodha_api
 
@@ -77,6 +78,17 @@ _qp = st.query_params
 if _qp.get("action") == "login" and _qp.get("request_token"):
     if zerodha_api.complete_login(_qp["request_token"]):
         st.session_state["kite_just_connected"] = True
+    st.query_params.clear()
+    st.rerun()
+
+# Watchlist click handlers
+if _qp.get("wl_select"):
+    st.session_state.active_symbol = urllib.parse.unquote_plus(_qp["wl_select"])
+    st.query_params.clear()
+    st.rerun()
+if _qp.get("wl_delete"):
+    from sms_sender import remove_from_watchlist as _rm_wl
+    _rm_wl(urllib.parse.unquote_plus(_qp["wl_delete"]))
     st.query_params.clear()
     st.rerun()
 
@@ -169,6 +181,42 @@ def make_sparkline(prices: list, color="#4caf50", w=60, h=22) -> str:
     pts = [f"{round(i*w/n,1)},{round((1-(p-lo)/(hi-lo))*(h-2)+1,1)}" for i, p in enumerate(prices)]
     return f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}"><polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/></svg>'
 
+
+def compute_pivots(df, timeframe: str = "5m") -> dict:
+    """Standard pivot points from previous session OHLC."""
+    if df is None or df.empty:
+        return {}
+    try:
+        if timeframe == "1D":
+            if len(df) < 2:
+                return {}
+            prev = df.iloc[-2]
+            H, L, C = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
+        else:
+            df2 = df.copy()
+            df2["_d"] = pd.to_datetime(df2.index).date
+            today = df2["_d"].iloc[-1]
+            prev_df = df2[df2["_d"] < today]
+            if prev_df.empty:
+                H = float(df["High"].max())
+                L = float(df["Low"].min())
+                C = float(df["Close"].iloc[-1])
+            else:
+                ld = prev_df["_d"].iloc[-1]
+                day = prev_df[prev_df["_d"] == ld]
+                H, L, C = float(day["High"].max()), float(day["Low"].min()), float(day["Close"].iloc[-1])
+        PP = (H + L + C) / 3
+        rng = H - L
+        return {
+            "PP": round(PP, 2),
+            "R1": round(2 * PP - L, 2),
+            "R2": round(PP + rng, 2),
+            "S1": round(2 * PP - H, 2),
+            "S2": round(PP - rng, 2),
+        }
+    except Exception:
+        return {}
+
 def _news_sentiment(headline: str) -> dict:
     t = headline.lower()
     bull = sum(1 for k in ["gain","rise","rally","up","surge","positive","growth","beat","strong","buy","bull","recover","boost","jump","soar"] if k in t)
@@ -225,6 +273,35 @@ def _load_wl_prices(symbols_tuple):
                     except Exception:
                         pass
     return results
+
+@st.cache_data(ttl=60 if _mkt_open_now else 600)
+def _load_wl_changes(symbols_tuple):
+    """Fetch day % change for watchlist symbols via yfinance fast_info."""
+    results = {}
+    def _f(name):
+        sym = SYMBOLS.get(name, _make_sym(name))
+        try:
+            import yfinance as yf
+            fi = yf.Ticker(sym["yf"]).fast_info
+            raw = getattr(fi, "regularMarketChangePercent", None)
+            if raw is not None:
+                return name, round(float(raw), 2)
+        except Exception:
+            pass
+        return name, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_f, n): n for n in symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=12):
+                try:
+                    n, pct = fut.result()
+                    results[n] = pct
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            pass
+    return results
+
 
 @st.cache_data(ttl=300)
 def _load_sparklines(symbols_tuple):
@@ -324,12 +401,29 @@ left_col, center_col, right_col = st.columns([4, 14, 7])
 # ══════════════════════════════════════════════
 with left_col:
     st.markdown(f"""
-<div style="padding:9px 10px 7px;border-bottom:1px solid #2a2a4a;background:#141428;">
-  <span style="color:#e8e8e8;font-size:0.95em;font-weight:700;">Options Terminal</span><br>
-  <span style="color:#4b5563;font-size:0.6em;">NSE · BSE · MCX &nbsp;
-  <span style="color:{mkt_color};font-weight:700;">{mkt_text}</span> &nbsp;
-  <span style="color:#f59e0b;">{get_market_opens_in()}</span></span>
+<div style="padding:8px 10px 6px;border-bottom:1px solid #2a2a4a;background:#141428;">
+  <span style="color:#e8e8e8;font-size:0.9em;font-weight:700;">Options Terminal</span>
+  <span style="margin-left:8px;background:{mkt_color}22;color:{mkt_color};
+               padding:1px 7px;border-radius:10px;font-size:0.55em;font-weight:700;">
+    ● {mkt_text}
+  </span>
 </div>""", unsafe_allow_html=True)
+
+    # Search bar (always visible at top)
+    sym_search = st.text_input(
+        "Search", placeholder="🔍  Search eg. NIFTY, RELIANCE...",
+        key="wl_search", label_visibility="collapsed",
+    )
+    if sym_search.strip():
+        candidates = _find_symbol_candidates(sym_search.strip())
+        if len(candidates) == 1:
+            add_to_watchlist(candidates[0])
+            st.session_state.active_symbol = candidates[0]; st.rerun()
+        elif candidates:
+            sel = st.selectbox("Select", candidates, key="search_pick", label_visibility="collapsed")
+            if st.button("Add & Load", key="load_search", use_container_width=True, type="primary"):
+                add_to_watchlist(sel)
+                st.session_state.active_symbol = sel; st.rerun()
 
     saved_watchlist = get_watchlist()
     if not saved_watchlist:
@@ -337,54 +431,67 @@ with left_col:
             add_to_watchlist(d)
         saved_watchlist = get_watchlist()
 
-    wl_prices = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
-    wl_sparklines = {}
+    wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
+    wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
 
-    st.markdown('<div style="padding:5px 8px;border-bottom:1px solid #2a2a4a;"><span style="color:#6b7280;font-size:0.56em;text-transform:uppercase;letter-spacing:1px;font-weight:600;">WATCHLIST</span></div>', unsafe_allow_html=True)
+    # Override index % change with already-loaded indices_data (more up-to-date)
+    _idx_pct_keys = {
+        "NIFTY 50": "NIFTY 50", "BANK NIFTY": "BANK NIFTY",
+        "FIN NIFTY": "FIN NIFTY", "MIDCAP SELECT": "MIDCAP SELECT", "INDIA VIX": "INDIA VIX",
+    }
+    for _ik, _iv in _idx_pct_keys.items():
+        if _iv in indices_data and indices_data[_iv].get("pct") is not None:
+            wl_changes[_ik] = indices_data[_iv]["pct"]
 
-    sym_search = st.text_input("Search", placeholder="Search eg. NIFTY, RELIANCE...", key="wl_search", label_visibility="collapsed")
-    if sym_search.strip():
-        candidates = _find_symbol_candidates(sym_search.strip())
-        if len(candidates) == 1:
-            st.session_state.active_symbol = candidates[0]; st.rerun()
-        elif candidates:
-            sel = st.selectbox("Select", candidates, key="search_pick", label_visibility="collapsed")
-            if st.button("Load", key="load_search", use_container_width=True):
-                st.session_state.active_symbol = sel; st.rerun()
+    st.markdown('<div style="padding:4px 10px 3px;border-bottom:1px solid #1e1e2e;">'
+                '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
+                '</div>', unsafe_allow_html=True)
 
+    rows_html = ""
     for wl_name in saved_watchlist:
-        sym_info  = SYMBOLS.get(wl_name, {})
-        nse_s     = sym_info.get("nse", wl_name)
-        disp      = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name))[0]
-        full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1]
-        p = wl_prices.get(wl_name)
-        if p:
-            price_str = f"{p:,.2f}"
-            pct_str   = ""
-            clr = "#4caf50"
-        else:
-            price_str, pct_str, clr = "--", "", "#6b7280"
-        spark_svg = ""
+        full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name
+        p   = wl_prices.get(wl_name)
+        pct = wl_changes.get(wl_name)
+        price_str = f"{p:,.2f}" if p else "--"
         is_active = (wl_name == active_sym_key)
-        left_bar  = "3px solid #387ed1" if is_active else "3px solid transparent"
-        row_bg    = "rgba(56,126,209,0.06)" if is_active else "transparent"
 
-        r_cols = st.columns([11, 1])
-        with r_cols[0]:
-            if st.button(f"{disp}　　{price_str}", key=f"wl_{wl_name}", use_container_width=True):
-                st.session_state._wl_selected = wl_name; st.rerun()
-        with r_cols[1]:
-            if st.button("×", key=f"wl_del_{wl_name}"):
-                remove_from_watchlist(wl_name); st.rerun()
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:0 4px 5px;border-left:{left_bar};background:{row_bg};">'
-            f'<span style="color:#4b5563;font-size:0.62em;">{full_name}</span>'
-            f'<span style="display:flex;align-items:center;gap:4px;">{spark_svg}'
-            f'<span style="color:{clr};font-size:0.68em;font-weight:600;">{pct_str}</span></span></div>',
-            unsafe_allow_html=True,
-        )
+        # Colour logic
+        if pct is not None:
+            clr = "#4caf50" if pct >= 0 else "#ef4444"
+            arrow = "▲" if pct >= 0 else "▼"
+            pct_html = (f'<div style="color:{clr};font-size:0.58em;margin-top:1px;">'
+                        f'{arrow} {abs(pct):.2f}%</div>')
+        else:
+            clr = "#e8e8e8" if p else "#4b5563"
+            pct_html = ""
 
+        left_brd = "border-left:3px solid #387ed1;" if is_active else "border-left:3px solid transparent;"
+        row_bg   = "background:rgba(56,126,209,0.07);" if is_active else ""
+        name_clr = "#60a5fa" if is_active else "#e8e8e8"
+
+        sel_href = "?wl_select=" + urllib.parse.quote_plus(wl_name)
+        del_href = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
+
+        rows_html += f"""
+<div style="{left_brd}{row_bg}display:flex;align-items:stretch;border-bottom:1px solid rgba(42,42,74,0.45);">
+  <a href="{sel_href}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;
+            align-items:center;padding:8px 8px 8px 9px;">
+    <div>
+      <div style="color:{name_clr};font-size:0.78em;font-weight:600;line-height:1.25;">{full_name}</div>
+      <div style="color:#374151;font-size:0.55em;margin-top:1px;">NSE</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="color:{clr};font-size:0.8em;font-weight:700;">{price_str}</div>
+      {pct_html}
+    </div>
+  </a>
+  <a href="{del_href}" title="Remove" style="color:#374151;font-size:0.72em;padding:6px 7px;
+            text-decoration:none;display:flex;align-items:center;">✕</a>
+</div>"""
+
+    st.markdown(rows_html, unsafe_allow_html=True)
+
+    # Manual add / remove
     wl_input = st.text_input("Add", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
     if wl_input.strip():
         inp = wl_input.strip()
@@ -469,33 +576,79 @@ with center_col:
             closed = close_trade(t["id"], cur_ltp)
             if closed: send_sms_to_all(closed, action="EXIT")
 
-    # ── Symbol header ──
+    # ── Symbol header + Signal box (always visible) ──
+    pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
     if data_ok:
         day_chg = df["Close"].iloc[-1] - df["Open"].iloc[0]
         day_pct = (day_chg / df["Open"].iloc[0]) * 100
         chg_c = _pct_color(day_pct)
         arrow  = "▲" if day_chg >= 0 else "▼"
         disp_short = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
-        action_pill = (
-            "<div style='background:#1a3a2a;color:#4caf50;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:700;display:inline-block;'>▲ BUY</div>" if action=="BUY" else
-            "<div style='background:#3a1a1a;color:#ef4444;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:700;display:inline-block;'>▼ SELL</div>" if action=="SELL" else
-            "<div style='background:#1a1a2e;color:#9ca3af;padding:2px 8px;border-radius:4px;font-size:0.68em;font-weight:600;display:inline-block;'>⏸ HOLD</div>"
-        )
+
+        # Signal box config
+        if action == "BUY":
+            _t1, _t2 = pivots.get("R1", 0), pivots.get("R2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("S1", 0)
+            _sig_bg = "linear-gradient(135deg,#0a1f0a 0%,#0d1a0d 100%)"
+            _sig_border, _sig_accent = "#1e4d1e", "#4caf50"
+            _sig_arrow, _sig_label = "▲", "BUY"
+            _sig_msg = f"Buy <b>{disp_short}</b> @ ₹{spot_price:,.2f}"
+        elif action == "SELL":
+            _t1, _t2 = pivots.get("S1", 0), pivots.get("S2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("R1", 0)
+            _sig_bg = "linear-gradient(135deg,#1f0a0a 0%,#1a0d0d 100%)"
+            _sig_border, _sig_accent = "#4d1e1e", "#ef4444"
+            _sig_arrow, _sig_label = "▼", "SELL"
+            _sig_msg = f"Sell <b>{disp_short}</b> @ ₹{spot_price:,.2f}"
+        else:
+            _t1, _t2 = pivots.get("R1", 0), pivots.get("S1", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), 0
+            _sig_bg = "linear-gradient(135deg,#0e0e1a 0%,#12121f 100%)"
+            _sig_border, _sig_accent = "#2a2a4a", "#6b7280"
+            _sig_arrow, _sig_label = "⏸", "HOLD"
+            _sig_msg = f"Watch <b>{disp_short}</b> — no setup yet"
+        _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
+
+        def _lvl(label, val, clr):
+            if not val: return ""
+            return (f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);'
+                    f'border-radius:5px;padding:4px 10px;text-align:center;min-width:62px;">'
+                    f'<div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
+                    f'<div style="color:{clr};font-size:0.8em;font-weight:700;margin-top:1px;">₹{val:,.0f}</div>'
+                    f'</div>')
+
+        _levels_html = "".join([
+            _lvl("T1",  _t1,  "#4caf50"),
+            _lvl("T2",  _t2,  "#22c55e"),
+            _lvl("AVG", _avg, "#fbbf24"),
+            _lvl("SL1", _sl1, "#f97316"),
+            _lvl("SL2", _sl2, "#ef4444"),
+        ])
+
         st.markdown(f"""
-<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:7px 4px 9px;border-bottom:1px solid #2a2a4a;">
-  <div>
-    <div style="display:flex;align-items:baseline;gap:8px;">
-      <span style="color:#e8e8e8;font-size:1.25em;font-weight:700;">{disp_short}</span>
-      <span style="color:#6b7280;font-size:0.7em;">NSE</span>
-    </div>
-    <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px;">
-      <span style="color:#e8e8e8;font-size:1.55em;font-weight:700;">{spot_price:,.2f}</span>
-      <span style="color:{chg_c};font-size:0.88em;font-weight:600;">{arrow} {abs(day_chg):,.2f} ({"+" if day_pct>=0 else ""}{day_pct:.2f}%)</span>
-    </div>
+<div style="display:flex;justify-content:space-between;align-items:center;
+            padding:6px 6px 4px;border-bottom:1px solid #2a2a4a;">
+  <div style="display:flex;align-items:baseline;gap:8px;">
+    <span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{disp_short}</span>
+    <span style="color:#4b5563;font-size:0.65em;">NSE</span>
+    <span style="color:#e8e8e8;font-size:1.35em;font-weight:700;">{spot_price:,.2f}</span>
+    <span style="color:{chg_c};font-size:0.8em;font-weight:600;">{arrow} {abs(day_pct):.2f}%</span>
   </div>
-  <div style="text-align:right;padding-top:4px;">
-    <div style="color:#6b7280;font-size:0.6em;">O: {df['Open'].iloc[0]:,.2f} &nbsp; H: {df['High'].max():,.2f} &nbsp; L: {df['Low'].min():,.2f}</div>
-    <div style="margin-top:4px;">{action_pill}</div>
+  <div style="color:#4b5563;font-size:0.58em;">
+    O:{df['Open'].iloc[0]:,.0f} &nbsp;H:{df['High'].max():,.0f} &nbsp;L:{df['Low'].min():,.0f}
+  </div>
+</div>
+<div style="background:{_sig_bg};border:1px solid {_sig_border};border-left:3px solid {_sig_accent};
+            border-radius:6px;padding:8px 10px 8px;margin:5px 0 3px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div>
+      <span style="color:{_sig_accent};font-size:0.65em;font-weight:800;letter-spacing:1px;">{_sig_arrow} {_sig_label}</span>
+      <div style="color:#e8e8e8;font-size:0.9em;font-weight:600;margin-top:2px;">{_sig_msg}</div>
+      <div style="color:#6b7280;font-size:0.58em;margin-top:2px;">
+        Target avg ₹{_avg:,.0f} &nbsp;·&nbsp; PP ₹{pivots.get("PP",0):,.0f}
+      </div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;">{_levels_html}</div>
   </div>
 </div>""", unsafe_allow_html=True)
     else:
@@ -534,6 +687,23 @@ with center_col:
             ))
         if spot_price:
             _fig.add_hline(y=spot_price, line_dash="dot", line_color="#387ed1", line_width=1)
+        # Pivot levels
+        _pv = compute_pivots(_df, st.session_state.chart_tf)
+        _pivot_lines = [
+            ("R2", _pv.get("R2"), "#ef4444", "dash"),
+            ("R1", _pv.get("R1"), "#f97316", "dash"),
+            ("PP", _pv.get("PP"), "#fbbf24", "dot"),
+            ("S1", _pv.get("S1"), "#22c55e", "dash"),
+            ("S2", _pv.get("S2"), "#16a34a", "dash"),
+        ]
+        for _lbl, _val, _clr, _lstyle in _pivot_lines:
+            if _val and _val > 0:
+                _fig.add_hline(
+                    y=_val, line_dash=_lstyle, line_color=_clr, line_width=1,
+                    annotation_text=f"{_lbl} {_val:,.0f}",
+                    annotation_position="right",
+                    annotation=dict(font=dict(color=_clr, size=9), bgcolor="rgba(19,23,34,0.7)"),
+                )
         _fig.update_layout(
             paper_bgcolor="#131722", plot_bgcolor="#131722",
             font=dict(color="#9ca3af", size=11),
