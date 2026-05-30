@@ -169,6 +169,42 @@ def make_sparkline(prices: list, color="#4caf50", w=60, h=22) -> str:
     pts = [f"{round(i*w/n,1)},{round((1-(p-lo)/(hi-lo))*(h-2)+1,1)}" for i, p in enumerate(prices)]
     return f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}"><polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/></svg>'
 
+
+def compute_pivots(df, timeframe: str = "5m") -> dict:
+    """Standard pivot points from previous session OHLC."""
+    if df is None or df.empty:
+        return {}
+    try:
+        if timeframe == "1D":
+            if len(df) < 2:
+                return {}
+            prev = df.iloc[-2]
+            H, L, C = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
+        else:
+            df2 = df.copy()
+            df2["_d"] = pd.to_datetime(df2.index).date
+            today = df2["_d"].iloc[-1]
+            prev_df = df2[df2["_d"] < today]
+            if prev_df.empty:
+                H = float(df["High"].max())
+                L = float(df["Low"].min())
+                C = float(df["Close"].iloc[-1])
+            else:
+                ld = prev_df["_d"].iloc[-1]
+                day = prev_df[prev_df["_d"] == ld]
+                H, L, C = float(day["High"].max()), float(day["Low"].min()), float(day["Close"].iloc[-1])
+        PP = (H + L + C) / 3
+        rng = H - L
+        return {
+            "PP": round(PP, 2),
+            "R1": round(2 * PP - L, 2),
+            "R2": round(PP + rng, 2),
+            "S1": round(2 * PP - H, 2),
+            "S2": round(PP - rng, 2),
+        }
+    except Exception:
+        return {}
+
 def _news_sentiment(headline: str) -> dict:
     t = headline.lower()
     bull = sum(1 for k in ["gain","rise","rally","up","surge","positive","growth","beat","strong","buy","bull","recover","boost","jump","soar"] if k in t)
@@ -358,30 +394,26 @@ with left_col:
         disp      = SYMBOL_SHORT.get(wl_name, (nse_s, wl_name))[0]
         full_name = SYMBOL_SHORT.get(wl_name, ("", wl_name))[1]
         p = wl_prices.get(wl_name)
-        if p:
-            price_str = f"{p:,.2f}"
-            pct_str   = ""
-            clr = "#4caf50"
-        else:
-            price_str, pct_str, clr = "--", "", "#6b7280"
-        spark_svg = ""
+        price_str = f"{p:,.2f}" if p else "--"
+        price_clr = "#e8e8e8" if p else "#4b5563"
         is_active = (wl_name == active_sym_key)
         left_bar  = "3px solid #387ed1" if is_active else "3px solid transparent"
-        row_bg    = "rgba(56,126,209,0.06)" if is_active else "transparent"
+        row_bg    = "rgba(56,126,209,0.08)" if is_active else "transparent"
+        name_clr  = "#387ed1" if is_active else "#9ca3af"
 
         r_cols = st.columns([11, 1])
         with r_cols[0]:
-            if st.button(f"{disp}　　{price_str}", key=f"wl_{wl_name}", use_container_width=True):
+            if st.button(disp, key=f"wl_{wl_name}", use_container_width=True):
                 st.session_state._wl_selected = wl_name; st.rerun()
         with r_cols[1]:
             if st.button("×", key=f"wl_del_{wl_name}"):
                 remove_from_watchlist(wl_name); st.rerun()
         st.markdown(
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:0 4px 5px;border-left:{left_bar};background:{row_bg};">'
-            f'<span style="color:#4b5563;font-size:0.62em;">{full_name}</span>'
-            f'<span style="display:flex;align-items:center;gap:4px;">{spark_svg}'
-            f'<span style="color:{clr};font-size:0.68em;font-weight:600;">{pct_str}</span></span></div>',
+            f'padding:1px 6px 7px;border-left:{left_bar};background:{row_bg};margin-top:-4px;">'
+            f'<span style="color:{name_clr};font-size:0.6em;">{full_name}</span>'
+            f'<span style="color:{price_clr};font-size:0.75em;font-weight:600;">{price_str}</span>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -501,6 +533,58 @@ with center_col:
     else:
         st.markdown(f'<div style="padding:7px 4px 9px;border-bottom:1px solid #2a2a4a;"><span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{active_sym_key}</span> <span style="color:#f59e0b;font-size:0.8em;">⟳ Loading...</span></div>', unsafe_allow_html=True)
 
+    # ── Trade signal box (shown when signal is BUY or SELL) ──
+    pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
+    if data_ok and action in ("BUY", "SELL") and pivots and spot_price:
+        _entry = spot_price
+        if action == "BUY":
+            _t1, _t2 = pivots.get("R1", 0), pivots.get("R2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("S1", 0)
+            _bg, _border, _accent = "#0a1f0a", "#1a4a1a", "#4caf50"
+            _arrow, _verb = "▲", "BUY"
+        else:
+            _t1, _t2 = pivots.get("S1", 0), pivots.get("S2", 0)
+            _sl1, _sl2 = pivots.get("PP", 0), pivots.get("R1", 0)
+            _bg, _border, _accent = "#1f0a0a", "#4a1a1a", "#ef4444"
+            _arrow, _verb = "▼", "SELL"
+        _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
+        disp_short2 = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
+        st.markdown(f"""
+<div style="background:{_bg};border:1px solid {_border};border-left:3px solid {_accent};
+            border-radius:6px;padding:9px 12px;margin:6px 0 2px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+    <div>
+      <span style="color:{_accent};font-size:0.72em;font-weight:800;letter-spacing:1px;">{_arrow} {_verb} SIGNAL</span>
+      <div style="color:#e8e8e8;font-size:1.05em;font-weight:700;margin-top:1px;">
+        {_verb} <span style="color:#fbbf24;">{disp_short2}</span>
+        &nbsp;@&nbsp;<span style="color:#e8e8e8;">₹{_entry:,.2f}</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <div style="background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
+        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">T1</div>
+        <div style="color:#4caf50;font-size:0.82em;font-weight:700;">₹{_t1:,.2f}</div>
+      </div>
+      <div style="background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
+        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">T2</div>
+        <div style="color:#4caf50;font-size:0.82em;font-weight:700;">₹{_t2:,.2f}</div>
+      </div>
+      <div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
+        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">AVG</div>
+        <div style="color:#fbbf24;font-size:0.82em;font-weight:700;">₹{_avg:,.2f}</div>
+      </div>
+      <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
+        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SL1</div>
+        <div style="color:#ef4444;font-size:0.82em;font-weight:700;">₹{_sl1:,.2f}</div>
+      </div>
+      <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:4px 8px;text-align:center;">
+        <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SL2</div>
+        <div style="color:#ef4444;font-size:0.82em;font-weight:700;">₹{_sl2:,.2f}</div>
+      </div>
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
     # ── Timeframe selector ──
     tf_col, _spacer = st.columns([4, 6])
     with tf_col:
@@ -534,6 +618,23 @@ with center_col:
             ))
         if spot_price:
             _fig.add_hline(y=spot_price, line_dash="dot", line_color="#387ed1", line_width=1)
+        # Pivot levels
+        _pv = compute_pivots(_df, st.session_state.chart_tf)
+        _pivot_lines = [
+            ("R2", _pv.get("R2"), "#ef4444", "dash"),
+            ("R1", _pv.get("R1"), "#f97316", "dash"),
+            ("PP", _pv.get("PP"), "#fbbf24", "dot"),
+            ("S1", _pv.get("S1"), "#22c55e", "dash"),
+            ("S2", _pv.get("S2"), "#16a34a", "dash"),
+        ]
+        for _lbl, _val, _clr, _lstyle in _pivot_lines:
+            if _val and _val > 0:
+                _fig.add_hline(
+                    y=_val, line_dash=_lstyle, line_color=_clr, line_width=1,
+                    annotation_text=f"{_lbl} {_val:,.0f}",
+                    annotation_position="right",
+                    annotation=dict(font=dict(color=_clr, size=9), bgcolor="rgba(19,23,34,0.7)"),
+                )
         _fig.update_layout(
             paper_bgcolor="#131722", plot_bgcolor="#131722",
             font=dict(color="#9ca3af", size=11),
