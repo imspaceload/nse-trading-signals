@@ -83,7 +83,10 @@ if _qp.get("action") == "login" and _qp.get("request_token"):
 
 # Watchlist click handlers
 if _qp.get("wl_select"):
-    st.session_state.active_symbol = urllib.parse.unquote_plus(_qp["wl_select"])
+    _sel_sym = urllib.parse.unquote_plus(_qp["wl_select"])
+    add_to_watchlist(_sel_sym)
+    st.session_state.active_symbol = _sel_sym
+    st.session_state["wl_search"] = ""
     st.query_params.clear()
     st.rerun()
 if _qp.get("wl_delete"):
@@ -416,14 +419,28 @@ with left_col:
     )
     if sym_search.strip():
         candidates = _find_symbol_candidates(sym_search.strip())
-        if len(candidates) == 1:
-            add_to_watchlist(candidates[0])
-            st.session_state.active_symbol = candidates[0]; st.rerun()
-        elif candidates:
-            sel = st.selectbox("Select", candidates, key="search_pick", label_visibility="collapsed")
-            if st.button("Add & Load", key="load_search", use_container_width=True, type="primary"):
-                add_to_watchlist(sel)
-                st.session_state.active_symbol = sel; st.rerun()
+        if candidates:
+            import html as _html_s
+            _sr = '<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;overflow:hidden;margin:2px 0 4px;">'
+            for _c in candidates[:7]:
+                _fn = _html_s.escape(SYMBOL_SHORT.get(_c, ("", _c))[1] or _c)
+                _tk = SYMBOL_SHORT.get(_c, (_c,))[0]
+                _href = "?wl_select=" + urllib.parse.quote_plus(_c)
+                _is_act = _c == active_sym_key
+                _bg = "background:rgba(56,126,209,0.08);" if _is_act else ""
+                _sr += (
+                    f'<a href="{_href}" style="{_bg}display:flex;justify-content:space-between;'
+                    f'align-items:center;padding:9px 12px;border-bottom:1px solid rgba(42,42,74,0.3);'
+                    f'text-decoration:none;">'
+                    f'<div><span style="display:block;color:#e8e8e8;font-size:0.82em;font-weight:600;">{_fn}</span>'
+                    f'<span style="color:#4b5563;font-size:0.57em;">NSE · {_tk}</span></div>'
+                    f'<span style="color:#387ed1;font-size:0.8em;">+</span>'
+                    f'</a>'
+                )
+            _sr += '</div>'
+            st.markdown(_sr, unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="color:#4b5563;font-size:0.72em;padding:3px 2px;">No results found.</div>', unsafe_allow_html=True)
 
     saved_watchlist = get_watchlist()
     if not saved_watchlist:
