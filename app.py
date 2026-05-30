@@ -132,6 +132,10 @@ div[data-testid="column"]:first-child [data-testid="stButton"] button:hover { ba
 .stCaption p { color: #4b5563 !important; font-size: 0.72em !important; }
 [data-testid="stAlert"] { background: #1a1a2e !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #9ca3af !important; font-size: 0.82em !important; }
 textarea { background: #12121f !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #e8e8e8 !important; font-size: 0.82em !important; }
+.modebar { background: rgba(19,23,34,0.92) !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; }
+.modebar-btn svg path, .modebar-btn svg line, .modebar-btn svg rect { fill: #6b7280 !important; stroke: #6b7280 !important; }
+.modebar-btn:hover svg path, .modebar-btn:hover svg line { fill: #e8e8e8 !important; stroke: #e8e8e8 !important; }
+.modebar-btn.active svg path { fill: #387ed1 !important; stroke: #387ed1 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -668,14 +672,17 @@ with _chart_tab:
     else:
         st.markdown(f'<div style="padding:7px 4px 9px;border-bottom:1px solid #2a2a4a;"><span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{active_sym_key}</span> <span style="color:#f59e0b;font-size:0.8em;">⟳ Loading...</span></div>', unsafe_allow_html=True)
 
-    # ── Timeframe selector ──
-    tf_col, _spacer = st.columns([4, 6])
+    # ── Timeframe selector + Refresh ──
+    tf_col, _rf_col, _spacer = st.columns([4, 1, 5])
     with tf_col:
         new_tf = st.radio("tf", ["1m","3m","5m","15m","1h","1D"],
             index=["1m","3m","5m","15m","1h","1D"].index(st.session_state.chart_tf),
             horizontal=True, key="tf_radio", label_visibility="collapsed")
         if new_tf != st.session_state.chart_tf:
             st.session_state.chart_tf = new_tf; st.cache_data.clear(); st.rerun()
+    with _rf_col:
+        if st.button("⟳", key="chart_refresh", help="Refresh chart data"):
+            st.cache_data.clear(); st.rerun()
 
     # ── Plotly Candlestick Chart (no deprecated APIs) ──
     import plotly.graph_objects as go
@@ -718,26 +725,50 @@ with _chart_tab:
                     annotation_position="right",
                     annotation=dict(font=dict(color=_clr, size=9), bgcolor="rgba(19,23,34,0.7)"),
                 )
+        _intraday = st.session_state.chart_tf != "1D"
+        _xaxis_cfg = dict(
+            rangeslider=dict(visible=False),
+            gridcolor="#1e1e2e",
+            showgrid=True,
+            color="#6b7280",
+            tickfont=dict(size=10),
+            linecolor="#2a2a4a",
+            showline=True,
+        )
+        if _intraday:
+            _xaxis_cfg["rangebreaks"] = [
+                dict(bounds=["sat", "mon"]),
+                dict(bounds=[16, 9.25], pattern="hour"),
+            ]
         _fig.update_layout(
             paper_bgcolor="#131722", plot_bgcolor="#131722",
             font=dict(color="#9ca3af", size=11),
-            xaxis=dict(
-                rangeslider=dict(visible=False), gridcolor="#1a1a2e",
-                showgrid=True, color="#6b7280", tickfont=dict(size=10),
-            ),
+            xaxis=_xaxis_cfg,
             yaxis=dict(
-                gridcolor="#1a1a2e", side="right", color="#6b7280",
+                gridcolor="#1e1e2e", side="right", color="#6b7280",
                 tickfont=dict(size=10), domain=[0.22, 1.0],
+                linecolor="#2a2a4a", showline=True,
             ),
             yaxis2=dict(
                 overlaying="y", side="right", showgrid=False,
                 showticklabels=False, domain=[0.0, 0.18],
             ),
-            margin=dict(l=0, r=55, t=8, b=25),
-            height=452,
+            margin=dict(l=0, r=60, t=4, b=20),
+            height=470,
+            hoverlabel=dict(bgcolor="#1e1e2e", bordercolor="#2a2a4a", font=dict(color="#e8e8e8", size=11)),
+            hovermode="x unified",
         )
         st.plotly_chart(_fig, use_container_width=True,
-                        config={"displayModeBar": False, "scrollZoom": True},
+                        config={
+                            "displayModeBar": True,
+                            "modeBarButtonsToRemove": [
+                                "select2d", "lasso2d", "toggleSpikelines",
+                                "hoverCompareCartesian", "hoverClosestCartesian",
+                                "toImage", "sendDataToCloud",
+                            ],
+                            "displaylogo": False,
+                            "scrollZoom": True,
+                        },
                         key="main_chart")
     else:
         st.markdown(
