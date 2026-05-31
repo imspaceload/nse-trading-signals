@@ -672,10 +672,6 @@ with _chart_tab:
 
     if data_ok and df is not None and not df.empty:
         _df = df.copy()
-        _colors = [
-            "rgba(76,175,80,0.45)" if c >= o else "rgba(244,67,54,0.45)"
-            for c, o in zip(_df["Close"], _df["Open"])
-        ]
         _fig = go.Figure()
         _fig.add_trace(go.Candlestick(
             x=_df.index, open=_df["Open"], high=_df["High"],
@@ -684,11 +680,6 @@ with _chart_tab:
             decreasing=dict(line=dict(color="#ef4444"), fillcolor="#ef4444"),
             showlegend=False,
         ))
-        if "Volume" in _df.columns:
-            _fig.add_trace(go.Bar(
-                x=_df.index, y=_df["Volume"], marker_color=_colors,
-                name="Vol", yaxis="y2", showlegend=False,
-            ))
         if spot_price:
             _fig.add_hline(y=spot_price, line_dash="dot", line_color="#387ed1", line_width=1)
         # Pivot levels
@@ -734,13 +725,9 @@ with _chart_tab:
             ),
             yaxis=dict(
                 gridcolor="#1e1e2e", side="right", color="#6b7280",
-                tickfont=dict(size=10), domain=[0.22, 1.0],
+                tickfont=dict(size=10),
                 linecolor="#2a2a4a", showline=True,
                 range=[_y_lo - _y_buf, _y_hi + _y_buf],
-            ),
-            yaxis2=dict(
-                overlaying="y", side="right", showgrid=False,
-                showticklabels=False, domain=[0.0, 0.18],
             ),
             margin=dict(l=0, r=65, t=4, b=20),
             height=480,
