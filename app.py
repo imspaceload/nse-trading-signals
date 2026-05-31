@@ -366,35 +366,12 @@ if st.session_state._wl_selected:
 active_sym_key = st.session_state.active_symbol
 active_sym = SYMBOLS.get(active_sym_key, _make_sym(active_sym_key))
 
-# ── Top bar ──
+# ── Market state (used throughout) ──
 indices_data = _load_indices()
 now_ist = datetime.now(IST)
 mkt_open = is_market_open()
 mkt_color = "#4caf50" if mkt_open else "#ef4444"
 mkt_text  = "LIVE" if mkt_open else "CLOSED"
-
-def _idx_pill(label, key):
-    d = indices_data.get(key, {})
-    if not d or not d.get("price"):
-        return f'<span style="color:#4b5563;font-size:0.78em;white-space:nowrap;">{label} --</span>'
-    p, pct = d["price"], d.get("pct", 0)
-    c = _pct_color(pct)
-    return (f'<span style="color:#9ca3af;font-size:0.7em;">{label}</span>&nbsp;'
-            f'<span style="color:#e8e8e8;font-weight:600;font-size:0.8em;">{p:,.2f}</span>&nbsp;'
-            f'<span style="color:{c};font-size:0.7em;">{"+" if pct>=0 else ""}{pct:.2f}%</span>')
-
-st.markdown(f"""
-<div style="background:#141428;border-bottom:1px solid #2a2a4a;padding:5px 14px;
-            display:flex;align-items:center;gap:16px;overflow-x:auto;white-space:nowrap;min-height:34px;">
-  <span style="background:{mkt_color};color:white;padding:2px 9px;border-radius:20px;font-size:0.62em;font-weight:700;flex-shrink:0;">● {mkt_text}</span>
-  {_idx_pill("NIFTY","NIFTY 50")}
-  <span style="color:#2a2a4a;">│</span>
-  {_idx_pill("BANK","BANK NIFTY")}
-  <span style="color:#2a2a4a;">│</span>
-  {_idx_pill("VIX","INDIA VIX")}
-  <span style="margin-left:auto;color:#4b5563;font-size:0.62em;flex-shrink:0;">{now_ist.strftime("%-d %b · %I:%M %p IST")}</span>
-</div>
-""", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════
@@ -622,9 +599,15 @@ with _chart_tab:
             _t1, _t2 = pivots.get("R1", 0), pivots.get("S1", 0)
             _sl1, _sl2 = pivots.get("PP", 0), 0
             _sig_bg = "linear-gradient(135deg,#0e0e1a 0%,#12121f 100%)"
-            _sig_border, _sig_accent = "#2a2a4a", "#6b7280"
-            _sig_arrow, _sig_label = "⏸", "HOLD"
-            _sig_msg = f"Watch <b>{disp_short}</b> — no setup yet"
+            _sig_border, _sig_accent = "#2a2a4a", "#9ca3af"
+            _sig_arrow, _sig_label = "⏸", "NEUTRAL"
+            _r1v, _s1v = pivots.get("R1", 0), pivots.get("S1", 0)
+            _sig_msg = (
+                f"<b>{disp_short}</b> · "
+                f'<span style="color:#4caf50;">Buy above ₹{_r1v:,.0f}</span>'
+                f' &nbsp;|&nbsp; '
+                f'<span style="color:#ef4444;">Sell below ₹{_s1v:,.0f}</span>'
+            )
         _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
 
         def _lvl(label, val, clr):
@@ -725,36 +708,42 @@ with _chart_tab:
                     annotation_position="right",
                     annotation=dict(font=dict(color=_clr, size=9), bgcolor="rgba(19,23,34,0.7)"),
                 )
-        _intraday = st.session_state.chart_tf != "1D"
-        _xaxis_cfg = dict(
-            rangeslider=dict(visible=False),
-            gridcolor="#1e1e2e",
-            showgrid=True,
-            color="#6b7280",
-            tickfont=dict(size=10),
-            linecolor="#2a2a4a",
-            showline=True,
-        )
-        if _intraday:
-            _xaxis_cfg["rangebreaks"] = [
-                dict(bounds=["sat", "mon"]),
-                dict(bounds=[16, 9.25], pattern="hour"),
-            ]
+        # Tight Y-axis: clamp to data ± 0.5%, include pivot extremes only if within 3%
+        _y_lo = _df["Low"].min()
+        _y_hi = _df["High"].max()
+        _pv_vals = [v for v in [_pv.get("S2"), _pv.get("S1"), _pv.get("R1"), _pv.get("R2")] if v and v > 0]
+        if _pv_vals:
+            _pv_lo = min(_pv_vals)
+            _pv_hi = max(_pv_vals)
+            if _pv_lo > _y_lo * 0.97:
+                _y_lo = min(_y_lo, _pv_lo)
+            if _pv_hi < _y_hi * 1.03:
+                _y_hi = max(_y_hi, _pv_hi)
+        _y_buf = (_y_hi - _y_lo) * 0.06
         _fig.update_layout(
             paper_bgcolor="#131722", plot_bgcolor="#131722",
             font=dict(color="#9ca3af", size=11),
-            xaxis=_xaxis_cfg,
+            xaxis=dict(
+                rangeslider=dict(visible=False),
+                gridcolor="#1e1e2e",
+                showgrid=True,
+                color="#6b7280",
+                tickfont=dict(size=10),
+                linecolor="#2a2a4a",
+                showline=True,
+            ),
             yaxis=dict(
                 gridcolor="#1e1e2e", side="right", color="#6b7280",
                 tickfont=dict(size=10), domain=[0.22, 1.0],
                 linecolor="#2a2a4a", showline=True,
+                range=[_y_lo - _y_buf, _y_hi + _y_buf],
             ),
             yaxis2=dict(
                 overlaying="y", side="right", showgrid=False,
                 showticklabels=False, domain=[0.0, 0.18],
             ),
-            margin=dict(l=0, r=60, t=4, b=20),
-            height=470,
+            margin=dict(l=0, r=65, t=4, b=20),
+            height=480,
             hoverlabel=dict(bgcolor="#1e1e2e", bordercolor="#2a2a4a", font=dict(color="#e8e8e8", size=11)),
             hovermode="x unified",
         )
