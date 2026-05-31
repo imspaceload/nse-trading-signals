@@ -415,6 +415,17 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     except Exception:
         return {}
 
+@st.cache_data(ttl=5 if _mkt_open_now else 300)
+def _load_kite_chart(nse_sym: str, timeframe: str) -> pd.DataFrame:
+    """Fetch real-time OHLCV candles from Kite Connect. Returns empty DataFrame on failure."""
+    if not nse_sym:
+        return pd.DataFrame()
+    try:
+        df = zerodha_api.get_historical_data(nse_sym, timeframe)
+        return df if (df is not None and not df.empty) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
 
 # ── Resolve active symbol ──
 if st.session_state._wl_selected:
@@ -574,9 +585,13 @@ with main_col:
 # ══════════════════════════════════════════════
 with _chart_tab:
     spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
-    # Override with real-time Kite LTP when available
-    if kite_live and active_sym_key in kite_quotes and kite_quotes[active_sym_key].get("ltp"):
-        spot_price = kite_quotes[active_sym_key]["ltp"]
+    # Override with real-time Kite data when connected
+    if kite_live:
+        if active_sym_key in kite_quotes and kite_quotes[active_sym_key].get("ltp"):
+            spot_price = kite_quotes[active_sym_key]["ltp"]
+        _kite_df = _load_kite_chart(active_sym.get("nse",""), st.session_state.chart_tf)
+        if _kite_df is not None and not _kite_df.empty:
+            df = _kite_df
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
     # Indicators & signals
