@@ -98,7 +98,7 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 15_000 if is_market_open() else 300_000
+_refresh_ms = 5_000 if (is_market_open() and kite_live) else (15_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -373,6 +373,48 @@ def _load_spot_and_df(yf_sym, nse_sym, timeframe):
 def _load_option_chain(nse_sym):
     return get_option_chain_nse_direct(nse_sym)
 
+# Kite uses different instrument names for indices
+_KITE_INDEX_INST = {
+    "NIFTY 50":       "NIFTY 50",
+    "BANK NIFTY":     "NIFTY BANK",
+    "FIN NIFTY":      "NIFTY FIN SERVICE",
+    "MIDCAP SELECT":  "NIFTY MID SELECT",
+    "INDIA VIX":      "INDIA VIX",
+}
+
+def _kite_nse_sym(sym_key: str, sym: dict) -> str:
+    """Return the NSE symbol string to pass to zerodha_api.get_quotes()."""
+    if sym_key in _KITE_INDEX_INST:
+        return _KITE_INDEX_INST[sym_key]
+    nse = sym.get("nse", "")
+    return nse if nse and not sym.get("yf","").startswith(("CL=","NG=","GC=","SI=")) else ""
+
+@st.cache_data(ttl=5 if _mkt_open_now else 300)
+def _load_kite_quotes(symbols_tuple: tuple) -> dict:
+    """
+    Batch real-time quotes from Kite Connect for all given symbol keys.
+    Returns {sym_key: {"ltp": float, "pct": float, "change": float}}.
+    One API call for all symbols — sub-second latency.
+    """
+    nse_syms, key_map = [], {}
+    for k in symbols_tuple:
+        sym = SYMBOLS.get(k, _make_sym(k))
+        nse = _kite_nse_sym(k, sym)
+        if nse:
+            nse_syms.append(nse)
+            key_map[nse] = k
+    if not nse_syms:
+        return {}
+    try:
+        raw = zerodha_api.get_quotes(nse_syms)
+        result = {}
+        for nse, data in raw.items():
+            k = key_map.get(nse, nse)
+            result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
+        return result
+    except Exception:
+        return {}
+
 
 # ── Resolve active symbol ──
 if st.session_state._wl_selected:
@@ -388,6 +430,36 @@ now_ist = datetime.now(IST)
 mkt_open = is_market_open()
 mkt_color = "#4caf50" if mkt_open else "#ef4444"
 mkt_text  = "LIVE" if mkt_open else "CLOSED"
+
+# ── Watchlist + live Kite quotes (fetched once, used in both columns) ──
+saved_watchlist = get_watchlist()
+if not saved_watchlist:
+    for _d in ["NIFTY 50","BANK NIFTY","RELIANCE","HDFC BANK","TCS","INFOSYS","IDEA"]:
+        add_to_watchlist(_d)
+    saved_watchlist = get_watchlist()
+
+# All symbols to quote: watchlist + active (in case active isn't in watchlist)
+_quote_set = tuple(sorted(set(saved_watchlist) | {active_sym_key}))
+kite_quotes = _load_kite_quotes(_quote_set) if kite_live else {}
+
+wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
+wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
+
+# Override with real-time Kite data when available
+for _k, _qd in kite_quotes.items():
+    if _qd.get("ltp"):
+        wl_prices[_k]  = _qd["ltp"]
+    if _qd.get("pct") is not None:
+        wl_changes[_k] = _qd["pct"]
+
+# Also override index % changes from indices_data
+_idx_pct_keys = {
+    "NIFTY 50": "NIFTY 50", "BANK NIFTY": "BANK NIFTY",
+    "FIN NIFTY": "FIN NIFTY", "MIDCAP SELECT": "MIDCAP SELECT", "INDIA VIX": "INDIA VIX",
+}
+for _ik, _iv in _idx_pct_keys.items():
+    if not kite_live and _iv in indices_data and indices_data[_iv].get("pct") is not None:
+        wl_changes[_ik] = indices_data[_iv]["pct"]
 
 
 # ═══════════════════════════════════════════════
@@ -439,24 +511,7 @@ with left_col:
         else:
             st.markdown('<div style="color:#4b5563;font-size:0.72em;padding:3px 2px;">No results found.</div>', unsafe_allow_html=True)
 
-    saved_watchlist = get_watchlist()
-    if not saved_watchlist:
-        for d in ["NIFTY 50","BANK NIFTY","RELIANCE","HDFC BANK","TCS","INFOSYS","IDEA"]:
-            add_to_watchlist(d)
-        saved_watchlist = get_watchlist()
-
-    wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
-    wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
-
-    # Override index % change with already-loaded indices_data (more up-to-date)
-    _idx_pct_keys = {
-        "NIFTY 50": "NIFTY 50", "BANK NIFTY": "BANK NIFTY",
-        "FIN NIFTY": "FIN NIFTY", "MIDCAP SELECT": "MIDCAP SELECT", "INDIA VIX": "INDIA VIX",
-    }
-    for _ik, _iv in _idx_pct_keys.items():
-        if _iv in indices_data and indices_data[_iv].get("pct") is not None:
-            wl_changes[_ik] = indices_data[_iv]["pct"]
-
+    # saved_watchlist, wl_prices, wl_changes already computed above (before columns)
     st.markdown('<div style="padding:4px 10px 3px;border-bottom:1px solid #1e1e2e;">'
                 '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
                 '</div>', unsafe_allow_html=True)
@@ -519,6 +574,9 @@ with main_col:
 # ══════════════════════════════════════════════
 with _chart_tab:
     spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
+    # Override with real-time Kite LTP when available
+    if kite_live and active_sym_key in kite_quotes and kite_quotes[active_sym_key].get("ltp"):
+        spot_price = kite_quotes[active_sym_key]["ltp"]
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
     # Indicators & signals
