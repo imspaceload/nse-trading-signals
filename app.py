@@ -179,11 +179,17 @@ _STRIKE_STEP = {
 }
 
 def _opt_strike(price: float, sym_key: str) -> int:
-    """Return nearest ATM option strike for the given symbol and price."""
+    """Return nearest ATM option strike using NSE-standard intervals."""
     if price <= 0: return 0
     step = _STRIKE_STEP.get(sym_key)
     if not step:
-        step = 2.5 if price < 50 else (5 if price < 250 else (10 if price < 1000 else (20 if price < 2500 else (50 if price < 10000 else 100))))
+        # NSE F&O stock strike intervals by price band
+        step = (1   if price < 25  else
+                2.5 if price < 50  else
+                5   if price < 250 else
+                10  if price < 1000 else
+                50  if price < 5000 else
+                100)
     return int(round(price / step) * step)
 
 def _pct_color(pct: float) -> str:
@@ -681,6 +687,10 @@ with _chart_tab:
         chg_c = _pct_color(day_pct)
         arrow  = "▲" if day_chg >= 0 else "▼"
         disp_short = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
+        # Use NSE symbol for option contract name (e.g. HDFCBANK, not "HDFC BANK")
+        _nse_label = active_sym.get("nse") or disp_short
+        # Only show CE/PE for F&O-eligible symbols (nse field non-empty, not commodity)
+        _has_fo = bool(active_sym.get("nse") and not active_sym.get("yf","").startswith(("CL=","NG=","GC=","SI=","^BSESN")))
 
         # Signal box config
         _atm = _opt_strike(spot_price, active_sym_key)
@@ -690,20 +700,26 @@ with _chart_tab:
             _sig_bg = "linear-gradient(135deg,#0a1f0a 0%,#0d1a0d 100%)"
             _sig_border, _sig_accent = "#1e4d1e", "#4caf50"
             _sig_arrow, _sig_label = "▲", "BUY"
-            _sig_msg = (
-                f'Buy <b>{disp_short} {_atm:,} CE</b>'
-                f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Call</span>'
-            )
+            if _has_fo:
+                _sig_msg = (
+                    f'Buy <b>{_nse_label} {_atm:,} CE</b>'
+                    f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Call</span>'
+                )
+            else:
+                _sig_msg = f'Buy <b>{disp_short}</b> @ ₹{spot_price:,.0f}'
         elif action == "SELL":
             _t1, _t2 = pivots.get("S1", 0), pivots.get("S2", 0)
             _sl1, _sl2 = pivots.get("PP", 0), pivots.get("R1", 0)
             _sig_bg = "linear-gradient(135deg,#1f0a0a 0%,#1a0d0d 100%)"
             _sig_border, _sig_accent = "#4d1e1e", "#ef4444"
             _sig_arrow, _sig_label = "▼", "SELL"
-            _sig_msg = (
-                f'Buy <b>{disp_short} {_atm:,} PE</b>'
-                f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Put</span>'
-            )
+            if _has_fo:
+                _sig_msg = (
+                    f'Buy <b>{_nse_label} {_atm:,} PE</b>'
+                    f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Put</span>'
+                )
+            else:
+                _sig_msg = f'Sell <b>{disp_short}</b> @ ₹{spot_price:,.0f}'
         else:
             _t1, _t2 = pivots.get("R1", 0), pivots.get("S1", 0)
             _sl1, _sl2 = pivots.get("PP", 0), 0
@@ -711,14 +727,22 @@ with _chart_tab:
             _sig_border, _sig_accent = "#2a2a4a", "#9ca3af"
             _sig_arrow, _sig_label = "⏸", "NEUTRAL"
             _r1v, _s1v = pivots.get("R1", 0), pivots.get("S1", 0)
-            _ce_strike = _opt_strike(_r1v, active_sym_key)
-            _pe_strike = _opt_strike(_s1v, active_sym_key)
-            _sig_msg = (
-                f"<b>{disp_short}</b> · "
-                f'<span style="color:#4caf50;">Break ₹{_r1v:,.0f} → <b>{_ce_strike:,} CE</b></span>'
-                f' &nbsp;|&nbsp; '
-                f'<span style="color:#ef4444;">Break ₹{_s1v:,.0f} → <b>{_pe_strike:,} PE</b></span>'
-            )
+            if _has_fo:
+                _ce_strike = _opt_strike(_r1v, active_sym_key)
+                _pe_strike = _opt_strike(_s1v, active_sym_key)
+                _sig_msg = (
+                    f"<b>{_nse_label}</b> · "
+                    f'<span style="color:#4caf50;">Break ₹{_r1v:,.0f} → <b>{_ce_strike:,} CE</b></span>'
+                    f' &nbsp;|&nbsp; '
+                    f'<span style="color:#ef4444;">Break ₹{_s1v:,.0f} → <b>{_pe_strike:,} PE</b></span>'
+                )
+            else:
+                _sig_msg = (
+                    f"<b>{disp_short}</b> · "
+                    f'<span style="color:#4caf50;">Buy above ₹{_r1v:,.0f}</span>'
+                    f' &nbsp;|&nbsp; '
+                    f'<span style="color:#ef4444;">Sell below ₹{_s1v:,.0f}</span>'
+                )
         _avg = round((_t1 + _t2) / 2, 2) if _t1 and _t2 else 0
 
         def _lvl(label, val, clr):
