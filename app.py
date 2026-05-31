@@ -132,10 +132,6 @@ div[data-testid="column"]:first-child [data-testid="stButton"] button:hover { ba
 .stCaption p { color: #4b5563 !important; font-size: 0.72em !important; }
 [data-testid="stAlert"] { background: #1a1a2e !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #9ca3af !important; font-size: 0.82em !important; }
 textarea { background: #12121f !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #e8e8e8 !important; font-size: 0.82em !important; }
-.modebar { background: rgba(19,23,34,0.92) !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; }
-.modebar-btn svg path, .modebar-btn svg line, .modebar-btn svg rect { fill: #6b7280 !important; stroke: #6b7280 !important; }
-.modebar-btn:hover svg path, .modebar-btn:hover svg line { fill: #e8e8e8 !important; stroke: #e8e8e8 !important; }
-.modebar-btn.active svg path { fill: #387ed1 !important; stroke: #387ed1 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -667,92 +663,40 @@ with _chart_tab:
         if st.button("⟳", key="chart_refresh", help="Refresh chart data"):
             st.cache_data.clear(); st.rerun()
 
-    # ── Plotly Candlestick Chart (no deprecated APIs) ──
-    import plotly.graph_objects as go
-
-    if data_ok and df is not None and not df.empty:
-        _df = df.copy()
-        _fig = go.Figure()
-        _fig.add_trace(go.Candlestick(
-            x=_df.index, open=_df["Open"], high=_df["High"],
-            low=_df["Low"], close=_df["Close"], name=active_sym_key,
-            increasing=dict(line=dict(color="#4caf50"), fillcolor="#4caf50"),
-            decreasing=dict(line=dict(color="#ef4444"), fillcolor="#ef4444"),
-            showlegend=False,
-        ))
-        if spot_price:
-            _fig.add_hline(y=spot_price, line_dash="dot", line_color="#387ed1", line_width=1)
-        # Pivot levels
-        _pv = compute_pivots(_df, st.session_state.chart_tf)
-        _pivot_lines = [
-            ("R2", _pv.get("R2"), "#ef4444", "dash"),
-            ("R1", _pv.get("R1"), "#f97316", "dash"),
-            ("PP", _pv.get("PP"), "#fbbf24", "dot"),
-            ("S1", _pv.get("S1"), "#22c55e", "dash"),
-            ("S2", _pv.get("S2"), "#16a34a", "dash"),
-        ]
-        for _lbl, _val, _clr, _lstyle in _pivot_lines:
-            if _val and _val > 0:
-                _fig.add_hline(
-                    y=_val, line_dash=_lstyle, line_color=_clr, line_width=1,
-                    annotation_text=f"{_lbl} {_val:,.0f}",
-                    annotation_position="right",
-                    annotation=dict(font=dict(color=_clr, size=9), bgcolor="rgba(19,23,34,0.7)"),
-                )
-        # Tight Y-axis: clamp to data ± 0.5%, include pivot extremes only if within 3%
-        _y_lo = _df["Low"].min()
-        _y_hi = _df["High"].max()
-        _pv_vals = [v for v in [_pv.get("S2"), _pv.get("S1"), _pv.get("R1"), _pv.get("R2")] if v and v > 0]
-        if _pv_vals:
-            _pv_lo = min(_pv_vals)
-            _pv_hi = max(_pv_vals)
-            if _pv_lo > _y_lo * 0.97:
-                _y_lo = min(_y_lo, _pv_lo)
-            if _pv_hi < _y_hi * 1.03:
-                _y_hi = max(_y_hi, _pv_hi)
-        _y_buf = (_y_hi - _y_lo) * 0.06
-        _fig.update_layout(
-            paper_bgcolor="#131722", plot_bgcolor="#131722",
-            font=dict(color="#9ca3af", size=11),
-            xaxis=dict(
-                rangeslider=dict(visible=False),
-                gridcolor="#1e1e2e",
-                showgrid=True,
-                color="#6b7280",
-                tickfont=dict(size=10),
-                linecolor="#2a2a4a",
-                showline=True,
-            ),
-            yaxis=dict(
-                gridcolor="#1e1e2e", side="right", color="#6b7280",
-                tickfont=dict(size=10),
-                linecolor="#2a2a4a", showline=True,
-                range=[_y_lo - _y_buf, _y_hi + _y_buf],
-            ),
-            margin=dict(l=0, r=65, t=4, b=20),
-            height=480,
-            hoverlabel=dict(bgcolor="#1e1e2e", bordercolor="#2a2a4a", font=dict(color="#e8e8e8", size=11)),
-            hovermode="x unified",
-        )
-        st.plotly_chart(_fig, use_container_width=True,
-                        config={
-                            "displayModeBar": True,
-                            "modeBarButtonsToRemove": [
-                                "select2d", "lasso2d", "toggleSpikelines",
-                                "hoverCompareCartesian", "hoverClosestCartesian",
-                                "toImage", "sendDataToCloud",
-                            ],
-                            "displaylogo": False,
-                            "scrollZoom": True,
-                        },
-                        key="main_chart")
-    else:
-        st.markdown(
-            '<div style="height:452px;background:#131722;border-radius:8px;'
-            'display:flex;align-items:center;justify-content:center;'
-            'color:#4b5563;font-size:0.85em;">Fetching chart data…</div>',
-            unsafe_allow_html=True,
-        )
+    # ── TradingView Advanced Chart ──
+    import streamlit.components.v1 as _stc
+    _tv_sym = active_sym.get("tv", f"NSE:{active_sym.get('nse', active_sym_key)}")
+    _tv_int = _TV_INT.get(st.session_state.chart_tf, "5")
+    _tv_id  = "tv_" + active_sym_key.replace(" ","_").replace("&","n").replace("-","_")
+    _tv_html = f"""<!DOCTYPE html><html><head>
+<style>html,body{{margin:0;padding:0;background:#131722;overflow:hidden;}}</style>
+</head><body>
+<div id="{_tv_id}" style="width:100%;height:490px;"></div>
+<script src="https://s.tradingview.com/tv.js"></script>
+<script>
+new TradingView.widget({{
+  "container_id": "{_tv_id}",
+  "autosize": true,
+  "symbol": "{_tv_sym}",
+  "interval": "{_tv_int}",
+  "timezone": "Asia/Kolkata",
+  "theme": "dark",
+  "style": "1",
+  "locale": "en",
+  "toolbar_bg": "#131722",
+  "enable_publishing": false,
+  "hide_top_toolbar": false,
+  "hide_legend": false,
+  "withdateranges": true,
+  "hide_side_toolbar": false,
+  "allow_symbol_change": false,
+  "save_image": false,
+  "studies": ["RSI@tv-basicstudies", "MACD@tv-basicstudies"],
+  "show_popup_button": false
+}});
+</script>
+</body></html>"""
+    _stc.html(_tv_html, height=492, scrolling=False)
 
     # ── Indicators row ──
     if data_ok and rsi_d:
