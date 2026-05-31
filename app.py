@@ -667,36 +667,20 @@ with _chart_tab:
     import streamlit.components.v1 as _stc
     _tv_sym = active_sym.get("tv", f"NSE:{active_sym.get('nse', active_sym_key)}")
     _tv_int = _TV_INT.get(st.session_state.chart_tf, "5")
-    _tv_id  = "tv_" + active_sym_key.replace(" ","_").replace("&","n").replace("-","_")
-    _tv_html = f"""<!DOCTYPE html><html><head>
-<style>html,body{{margin:0;padding:0;background:#131722;overflow:hidden;}}</style>
-</head><body>
-<div id="{_tv_id}" style="width:100%;height:490px;"></div>
-<script src="https://s.tradingview.com/tv.js"></script>
-<script>
-new TradingView.widget({{
-  "container_id": "{_tv_id}",
-  "autosize": true,
-  "symbol": "{_tv_sym}",
-  "interval": "{_tv_int}",
-  "timezone": "Asia/Kolkata",
-  "theme": "dark",
-  "style": "1",
-  "locale": "en",
-  "toolbar_bg": "#131722",
-  "enable_publishing": false,
-  "hide_top_toolbar": false,
-  "hide_legend": false,
-  "withdateranges": true,
-  "hide_side_toolbar": false,
-  "allow_symbol_change": false,
-  "save_image": false,
-  "studies": ["RSI@tv-basicstudies", "MACD@tv-basicstudies"],
-  "show_popup_button": false
-}});
-</script>
-</body></html>"""
-    _stc.html(_tv_html, height=492, scrolling=False)
+    _tv_url = (
+        "https://s.tradingview.com/widgetembed/?"
+        f"symbol={urllib.parse.quote(_tv_sym, safe='')}"
+        f"&interval={_tv_int}"
+        "&theme=dark&style=1&locale=en"
+        "&timezone=Asia%2FKolkata"
+        "&toolbar_bg=131722"
+        "&hide_side_toolbar=0"
+        "&allow_symbol_change=0"
+        "&withdateranges=1"
+        "&save_image=0"
+        "&studies=RSI%40tv-basicstudies%7CMACD%40tv-basicstudies"
+    )
+    _stc.iframe(_tv_url, height=500, scrolling=False)
 
     # ── Indicators row ──
     if data_ok and rsi_d:
