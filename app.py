@@ -220,6 +220,26 @@ def compute_pivots(df, timeframe: str = "5m") -> dict:
     except Exception:
         return {}
 
+def _df_to_lc_candles(df, timeframe: str) -> list:
+    """Convert yfinance OHLC DataFrame to TradingView Lightweight Charts format."""
+    rows = []
+    for ts, row in df.iterrows():
+        try:
+            if timeframe == "1D":
+                t = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
+            else:
+                t = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(pd.Timestamp(ts).timestamp())
+            rows.append({
+                "time": t,
+                "open":  round(float(row["Open"]),  2),
+                "high":  round(float(row["High"]),  2),
+                "low":   round(float(row["Low"]),   2),
+                "close": round(float(row["Close"]), 2),
+            })
+        except Exception:
+            continue
+    return rows
+
 def _news_sentiment(headline: str) -> dict:
     t = headline.lower()
     bull = sum(1 for k in ["gain","rise","rally","up","surge","positive","growth","beat","strong","buy","bull","recover","boost","jump","soar"] if k in t)
@@ -663,24 +683,48 @@ with _chart_tab:
         if st.button("⟳", key="chart_refresh", help="Refresh chart data"):
             st.cache_data.clear(); st.rerun()
 
-    # ── TradingView Advanced Chart ──
+    # ── TradingView Lightweight Charts (open-source, our own data) ──
+    import json as _json
     import streamlit.components.v1 as _stc
-    _tv_sym = active_sym.get("tv", f"NSE:{active_sym.get('nse', active_sym_key)}")
-    _tv_int = _TV_INT.get(st.session_state.chart_tf, "5")
-    _tv_url = (
-        "https://s.tradingview.com/widgetembed/?"
-        f"symbol={urllib.parse.quote(_tv_sym, safe='')}"
-        f"&interval={_tv_int}"
-        "&theme=dark&style=1&locale=en"
-        "&timezone=Asia%2FKolkata"
-        "&toolbar_bg=131722"
-        "&hide_side_toolbar=0"
-        "&allow_symbol_change=0"
-        "&withdateranges=1"
-        "&save_image=0"
-        "&studies=RSI%40tv-basicstudies%7CMACD%40tv-basicstudies"
-    )
-    _stc.iframe(_tv_url, height=500, scrolling=False)
+
+    _lc_candles = _df_to_lc_candles(df, st.session_state.chart_tf) if (data_ok and df is not None and not df.empty) else []
+    _lc_json    = _json.dumps(_lc_candles)
+
+    # Price lines: LTP + pivots
+    _pl_js = []
+    if data_ok and spot_price:
+        _pl_js.append(f"cs.createPriceLine({{price:{spot_price},color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});")
+    for _plbl, _pclr, _pls in [("R2","#ef4444",2),("R1","#f97316",2),("PP","#fbbf24",1),("S1","#22c55e",2),("S2","#16a34a",2)]:
+        _pval = pivots.get(_plbl)
+        if _pval and _pval > 0:
+            _pl_js.append(f"cs.createPriceLine({{price:{_pval},color:'{_pclr}',lineWidth:1,lineStyle:{_pls},axisLabelVisible:true,title:'{_plbl}'}});")
+
+    _chart_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>*{{margin:0;padding:0;box-sizing:border-box;}}html,body{{background:#131722;overflow:hidden;width:100%;height:490px;}}</style>
+</head><body>
+<div id="c" style="width:100%;height:490px;"></div>
+<script>
+const chart = LightweightCharts.createChart(document.getElementById('c'), {{
+  width: window.innerWidth, height: 490,
+  layout: {{ background:{{type:'solid',color:'#131722'}}, textColor:'#9ca3af', fontSize:11 }},
+  grid: {{ vertLines:{{color:'#1e1e2e'}}, horzLines:{{color:'#1e1e2e'}} }},
+  crosshair: {{ mode:1 }},
+  rightPriceScale: {{ borderColor:'#2a2a4a' }},
+  timeScale: {{ borderColor:'#2a2a4a', timeVisible:true, secondsVisible:false, rightOffset:5 }},
+}});
+const cs = chart.addCandlestickSeries({{
+  upColor:'#4caf50', downColor:'#ef4444',
+  borderUpColor:'#4caf50', borderDownColor:'#ef4444',
+  wickUpColor:'#4caf50', wickDownColor:'#ef4444',
+}});
+const data = {_lc_json};
+if (data.length > 0) {{ cs.setData(data); chart.timeScale().fitContent(); }}
+{''.join(_pl_js)}
+window.addEventListener('resize', () => chart.resize(window.innerWidth, 490));
+</script></body></html>"""
+
+    _stc.html(_chart_html, height=492, scrolling=False)
 
     # ── Indicators row ──
     if data_ok and rsi_d:
