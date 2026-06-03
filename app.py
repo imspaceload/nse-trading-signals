@@ -7,6 +7,16 @@ import pandas as pd
 import os
 import urllib.parse
 
+# Load .env file directly — bypasses systemd EnvironmentFile parsing quirks
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _ef:
+        for _line in _ef:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 import zerodha_api
 
 from config import (
