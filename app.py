@@ -107,7 +107,7 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 5_000 if (is_market_open() and kite_live) else (15_000 if is_market_open() else 300_000)
+_refresh_ms = 1_000 if (is_market_open() and kite_live) else (15_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -401,6 +401,59 @@ def _load_spot_and_df(yf_sym, nse_sym, timeframe):
 def _load_option_chain(nse_sym):
     return get_option_chain_nse_direct(nse_sym)
 
+@st.cache_data(ttl=120 if _mkt_open_now else 3600)
+def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
+    """Compute RSI+MACD+Supertrend+VWAP signals for all listed F&O symbols in parallel."""
+    _tf_map = {
+        "1m":("1d","1m"), "3m":("1d","2m"), "5m":("1d","5m"),
+        "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d"),
+    }
+    period, interval = _tf_map.get(timeframe, ("1d","5m"))
+
+    def _one(sym_key):
+        sym = SYMBOLS.get(sym_key, {})
+        yf_s = sym.get("yf", "")
+        if not yf_s:
+            return sym_key, None
+        try:
+            import yfinance as yf
+            df = yf.Ticker(yf_s).history(period=period, interval=interval)
+            if df.empty or len(df) < 14:
+                return sym_key, None
+            spot = float(df["Close"].iloc[-1])
+            rsi_d  = compute_rsi(df)
+            macd_d = compute_macd(df)
+            st_d   = compute_supertrend(df)
+            vwap_d = compute_vwap(df)
+            sig    = generate_signal(rsi_d, macd_d, st_d, vwap_d, None, spot)
+            return sym_key, {
+                "spot":       round(spot, 2),
+                "rsi":        round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0,
+                "macd":       (macd_d.get("signal") or "--") if macd_d else "--",
+                "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
+                "vwap":       (vwap_d.get("signal") or "--") if vwap_d else "--",
+                "signal":     sig.get("action", "HOLD"),
+                "buy_count":  sig.get("buy_count", 0),
+                "sell_count": sig.get("sell_count", 0),
+            }
+        except Exception:
+            return sym_key, None
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as ex:
+        futs = {ex.submit(_one, k): k for k in symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=55):
+                try:
+                    k, v = fut.result()
+                    if v:
+                        results[k] = v
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            pass
+    return results
+
 # Kite uses different instrument names for indices
 _KITE_INDEX_INST = {
     "NIFTY 50":       "NIFTY 50",
@@ -417,7 +470,7 @@ def _kite_nse_sym(sym_key: str, sym: dict) -> str:
     nse = sym.get("nse", "")
     return nse if nse and not sym.get("yf","").startswith(("CL=","NG=","GC=","SI=")) else ""
 
-@st.cache_data(ttl=5 if _mkt_open_now else 300)
+@st.cache_data(ttl=1 if _mkt_open_now else 300)
 def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     """
     Batch real-time quotes from Kite Connect for all given symbol keys.
@@ -443,7 +496,7 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     except Exception:
         return {}
 
-@st.cache_data(ttl=5 if _mkt_open_now else 300)
+@st.cache_data(ttl=1 if _mkt_open_now else 300)
 def _load_kite_chart(nse_sym: str, timeframe: str) -> pd.DataFrame:
     """Fetch real-time OHLCV candles from Kite Connect. Returns empty DataFrame on failure."""
     if not nse_sym:
@@ -606,20 +659,24 @@ with left_col:
 
 
 with main_col:
-    _chart_tab, _oc_tab = st.tabs(["📈  Chart", "⛓  Option Chain"])
+    _chart_tab, _oc_tab, _scan_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner"])
 
 # ══════════════════════════════════════════════
 #  CHART TAB
 # ══════════════════════════════════════════════
 with _chart_tab:
-    spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
-    # Override with real-time Kite data when connected
     if kite_live:
-        if active_sym_key in kite_quotes and kite_quotes[active_sym_key].get("ltp"):
-            spot_price = kite_quotes[active_sym_key]["ltp"]
-        _kite_df = _load_kite_chart(active_sym.get("nse",""), st.session_state.chart_tf)
-        if _kite_df is not None and not _kite_df.empty:
-            df = _kite_df
+        # Kite for LTP; yfinance as OHLCV fallback so indicators always have data
+        spot_price = kite_quotes.get(active_sym_key, {}).get("ltp")
+        df = _load_kite_chart(active_sym.get("nse",""), st.session_state.chart_tf)
+        if df is None or df.empty:
+            _, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
+        if df is None:
+            df = pd.DataFrame()
+        if spot_price is None:
+            spot_price, _ = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
+    else:
+        spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
     # Indicators & signals
@@ -1010,6 +1067,109 @@ with _oc_tab:
 
 
 # ══════════════════════════════════════════════
+#  SCANNER TAB
+# ══════════════════════════════════════════════
+with _scan_tab:
+    _fo_syms = tuple(sorted(
+        k for k, v in SYMBOLS.items()
+        if v.get("nse") and not v.get("yf","").startswith(("CL=","NG=","GC=","SI=","^BSESN"))
+    ))
+
+    _sc_col1, _sc_col2, _sc_col3 = st.columns([3, 1, 4])
+    with _sc_col1:
+        _scan_tf = st.radio("scan_tf", ["5m","15m","1h","1D"],
+            index=1, horizontal=True, key="scan_tf_radio", label_visibility="collapsed")
+    with _sc_col2:
+        if st.button("⟳", key="scan_refresh"):
+            st.cache_data.clear(); st.rerun()
+    with _sc_col3:
+        _scan_filter = st.radio("scan_sig_filter", ["All","BUY","SELL","HOLD"],
+            horizontal=True, key="scan_filter_radio", label_visibility="collapsed")
+
+    st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · cached 2 min</div>', unsafe_allow_html=True)
+
+    with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):
+        _scan_data = _load_scanner_signals(_fo_syms, _scan_tf)
+
+    _buys  = sum(1 for v in _scan_data.values() if v.get("signal") == "BUY")
+    _sells = sum(1 for v in _scan_data.values() if v.get("signal") == "SELL")
+    _holds = len(_scan_data) - _buys - _sells
+
+    st.markdown(f"""
+<div style="display:flex;gap:6px;margin-bottom:8px;">
+  <div style="background:#0a1f0a;border:1px solid #1e4d1e;border-radius:6px;padding:6px 10px;flex:1;text-align:center;">
+    <div style="color:#4caf50;font-size:0.52em;text-transform:uppercase;">BUY</div>
+    <div style="color:#4caf50;font-size:1.5em;font-weight:700;">{_buys}</div>
+  </div>
+  <div style="background:#1f0a0a;border:1px solid #4d1e1e;border-radius:6px;padding:6px 10px;flex:1;text-align:center;">
+    <div style="color:#ef4444;font-size:0.52em;text-transform:uppercase;">SELL</div>
+    <div style="color:#ef4444;font-size:1.5em;font-weight:700;">{_sells}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:6px 10px;flex:1;text-align:center;">
+    <div style="color:#9ca3af;font-size:0.52em;text-transform:uppercase;">HOLD</div>
+    <div style="color:#9ca3af;font-size:1.5em;font-weight:700;">{_holds}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:6px 10px;flex:2;text-align:center;">
+    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">LOADED</div>
+    <div style="color:#e8e8e8;font-size:1.5em;font-weight:700;">{len(_scan_data)}<span style="font-size:0.5em;color:#6b7280;">/{len(_fo_syms)}</span></div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    def _scan_sort_key(item):
+        v = item[1]
+        sig = v.get("signal","HOLD")
+        return (0 if sig=="BUY" else (1 if sig=="SELL" else 2), -v.get("buy_count",0) if sig=="BUY" else (-v.get("sell_count",0) if sig=="SELL" else 0))
+
+    _scan_rows = sorted(_scan_data.items(), key=_scan_sort_key)
+    if _scan_filter != "All":
+        _scan_rows = [(k, v) for k, v in _scan_rows if v.get("signal") == _scan_filter]
+
+    if not _scan_rows:
+        st.markdown('<div style="color:#6b7280;padding:20px;text-align:center;font-size:0.82em;">No signals loaded. Click ⟳ to scan.</div>', unsafe_allow_html=True)
+    else:
+        tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.77em;">'
+        tbl += ('<thead><tr style="background:#1e293b;">'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:left;">SYMBOL</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:right;">PRICE</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:center;">RSI</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:center;">MACD</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:center;">ST</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:center;">VWAP</th>'
+                '<th style="padding:4px 6px;color:#9ca3af;text-align:center;">SIGNAL</th>'
+                '</tr></thead><tbody>')
+
+        for sym_key, v in _scan_rows:
+            sig   = v.get("signal","HOLD")
+            rsi_v = v.get("rsi", 50)
+            macd  = v.get("macd","--")
+            st_v  = v.get("supertrend","--")
+            vwap  = v.get("vwap","--")
+            spot  = v.get("spot", 0)
+            nse   = SYMBOLS.get(sym_key, {}).get("nse", sym_key)
+            sel   = "?wl_select=" + urllib.parse.quote_plus(sym_key)
+
+            sig_c  = "#4caf50" if sig=="BUY" else ("#ef4444" if sig=="SELL" else "#9ca3af")
+            row_bg = "background:rgba(76,175,80,0.06);" if sig=="BUY" else ("background:rgba(239,68,68,0.06);" if sig=="SELL" else "")
+            rsi_c  = "#ef4444" if rsi_v > 70 else ("#4caf50" if rsi_v < 30 else "#d1d5db")
+            macd_c = "#4caf50" if macd=="BUY" else ("#ef4444" if macd=="SELL" else "#9ca3af")
+            st_c   = "#4caf50" if st_v=="BULL" else "#ef4444"
+            vwap_c = "#4caf50" if vwap=="BUY" else ("#ef4444" if vwap=="SELL" else "#9ca3af")
+
+            tbl += f'<tr style="border-bottom:1px solid rgba(42,42,74,0.2);{row_bg}">'
+            tbl += f'<td style="padding:4px 6px;"><a href="{sel}" style="color:#e8e8e8;text-decoration:none;font-weight:600;">{sym_key}</a> <span style="color:#4b5563;font-size:0.72em;">{nse}</span></td>'
+            tbl += f'<td style="padding:4px 6px;color:#d1d5db;text-align:right;">{spot:,.2f}</td>'
+            tbl += f'<td style="padding:4px 6px;color:{rsi_c};text-align:center;font-weight:600;">{rsi_v:.0f}</td>'
+            tbl += f'<td style="padding:4px 6px;color:{macd_c};text-align:center;">{macd}</td>'
+            tbl += f'<td style="padding:4px 6px;color:{st_c};text-align:center;">{st_v}</td>'
+            tbl += f'<td style="padding:4px 6px;color:{vwap_c};text-align:center;">{vwap}</td>'
+            tbl += f'<td style="padding:4px 6px;text-align:center;"><span style="color:{sig_c};font-weight:700;">{sig}</span></td>'
+            tbl += '</tr>'
+
+        tbl += '</tbody></table>'
+        st.markdown(tbl, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════
 #  BOTTOM TABS: AI News + SMS Admin
 # ══════════════════════════════════════════════
 news_data = _load_news()
@@ -1341,7 +1501,7 @@ with tab_sms:
 st.markdown(
     f'<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
     f'For educational purposes only. Not financial advice. '
-    f'Auto-refreshes every {"15s" if mkt_open else "5min"}.'
+    f'Auto-refreshes every {"1s" if (mkt_open and kite_live) else "15s" if mkt_open else "5min"}.'
     f'</div>',
     unsafe_allow_html=True,
 )
