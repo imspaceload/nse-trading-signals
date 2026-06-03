@@ -1057,19 +1057,22 @@ with tab_news:
 
     with sent_col:
         sent_score = 50
-        if data_ok and rsi_d and st_d and vwap_d:
-            _rv = rsi_d.get("value", 50)
-            rsi_val2 = float(_rv) if _rv is not None else 50
-            if not (0 <= rsi_val2 <= 100): rsi_val2 = 50  # catches NaN, inf
-            _pcr = oi_d.get("pcr", 0.8) if oi_d else 0.8
-            try: _pcr = float(_pcr); _pcr = 0.8 if not (0 <= _pcr <= 10) else _pcr
-            except Exception: _pcr = 0.8
-            sent_score = min(100, max(0,
-                int((rsi_val2-30)/40*25) +
-                (25 if (st_d and st_d.get("direction")==1) else 0) +
-                (25 if (vwap_d and vwap_d.get("signal")=="BUY") else 0) +
-                (0 if not oi_d else min(25, max(0, int(_pcr*25))))
-            ))
+        try:
+            if data_ok and rsi_d and st_d and vwap_d:
+                _rv = rsi_d.get("value", 50)
+                rsi_val2 = float(_rv) if _rv is not None else 50
+                if not (0 <= rsi_val2 <= 100): rsi_val2 = 50
+                _pcr = oi_d.get("pcr", 0.8) if oi_d else 0.8
+                try: _pcr = float(_pcr); _pcr = 0.8 if not (0 <= _pcr <= 10) else _pcr
+                except Exception: _pcr = 0.8
+                sent_score = min(100, max(0,
+                    int((rsi_val2-30)/40*25) +
+                    (25 if (st_d and st_d.get("direction")==1) else 0) +
+                    (25 if (vwap_d and vwap_d.get("signal")=="BUY") else 0) +
+                    (0 if not oi_d else min(25, max(0, int(_pcr*25))))
+                ))
+        except Exception:
+            sent_score = 50
         sent_label = "RISK-ON" if sent_score>=60 else ("RISK-OFF" if sent_score<=40 else "NEUTRAL")
         sent_clr   = "#4caf50" if sent_score>=60 else ("#ef4444" if sent_score<=40 else "#f59e0b")
 
