@@ -1,6 +1,5 @@
 """
-Lean data fetcher. Dhan primary (any IP), NSE direct fallback (Indian IP), yfinance last resort.
-No NSE session management — simple requests with headers work fine from Indian IPs.
+Data fetcher: Kite Connect primary, NSE direct fallback (Indian IP), yfinance last resort.
 """
 from typing import Optional, List
 import concurrent.futures
@@ -142,33 +141,12 @@ _IDX_LOOKUP = {
     "NIFTY": "NIFTY 50", "BANKNIFTY": "BANK NIFTY",
     "FINNIFTY": "FIN NIFTY", "MIDCPNIFTY": "MIDCAP SELECT",
 }
-_IDX_DHAN_IDS = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 27}
 
 
 def get_spot_price(symbol: str, nse_symbol: str = None) -> Optional[float]:
     nse_up = (nse_symbol or "").strip().upper()
 
-    # 1. Dhan LTP — works from any IP
-    try:
-        from dhan_api import _is_configured, get_ltp, get_security_id
-        if _is_configured() and nse_up:
-            if nse_up in _IDX_DHAN_IDS:
-                sid = _IDX_DHAN_IDS[nse_up]
-                d = get_ltp({"IDX_I": [sid]})
-                p = (d or {}).get("IDX_I", {}).get(str(sid), {}).get("last_price")
-                if p and float(p) > 0:
-                    return round(float(p), 2)
-            else:
-                sid = get_security_id(nse_up, "NSE_EQ")
-                if sid:
-                    d = get_ltp({"NSE_EQ": [sid]})
-                    p = (d or {}).get("NSE_EQ", {}).get(str(sid), {}).get("last_price")
-                    if p and float(p) > 0:
-                        return round(float(p), 2)
-    except Exception:
-        pass
-
-    # 2. NSE API — works from Indian IP
+    # 1. NSE API — works from Indian IP
     if nse_up:
         if nse_up in _IDX_LOOKUP:
             data = _nse("https://www.nseindia.com/api/allIndices", timeout=6)
@@ -210,12 +188,6 @@ _TF_YF = {
     "1h":  ("5d",  "60m"),
     "1D":  ("1mo", "1d"),
 }
-_TF_DHAN_INT = {
-    "1m": "1", "3m": "1", "5m": "5", "15m": "15", "1h": "60", "1D": "60",
-}
-_YF_INT_DHAN = {
-    "1m": "1", "2m": "1", "5m": "5", "15m": "15", "30m": "25", "60m": "60", "1d": "60",
-}
 _IDX_YF_NSE = {
     "^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY",
     "^CNXFIN": "FIN NIFTY", "^BSESN": "SENSEX",
@@ -224,21 +196,7 @@ _IDX_SEGS = {"NIFTY 50", "BANK NIFTY", "FIN NIFTY", "MIDCAP SELECT", "SENSEX"}
 
 
 def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    dhan_int = _YF_INT_DHAN.get(interval, "5")
-    nse_sym = _IDX_YF_NSE.get(symbol, symbol.replace(".NS", ""))
-    seg = "IDX_I" if nse_sym in _IDX_SEGS else "NSE_EQ"
-
-    # 1. Dhan
-    try:
-        from dhan_api import get_candles_for_symbol, _is_configured
-        if _is_configured():
-            df = get_candles_for_symbol(nse_sym, period=period, interval=dhan_int, exchange_segment=seg)
-            if not df.empty:
-                return df
-    except Exception:
-        pass
-
-    # 2. yfinance (works from Indian IP)
+    # yfinance (works from Indian IP)
     try:
         import yfinance as yf
         for p in [period, "2d", "5d"]:
@@ -260,16 +218,6 @@ def get_chart_data(yf_symbol: str, timeframe: str = "1D") -> pd.DataFrame:
 
 
 def get_sparkline_data(yf_symbol: str, n: int = 18) -> List[float]:
-    nse_sym = _IDX_YF_NSE.get(yf_symbol, yf_symbol.replace(".NS", ""))
-    seg = "IDX_I" if nse_sym in _IDX_SEGS else "NSE_EQ"
-    try:
-        from dhan_api import get_candles_for_symbol, _is_configured
-        if _is_configured():
-            df = get_candles_for_symbol(nse_sym, period="5d", interval="60", exchange_segment=seg)
-            if not df.empty:
-                return [round(c, 2) for c in df["Close"].tail(n).tolist()]
-    except Exception:
-        pass
     try:
         import yfinance as yf
         df = yf.Ticker(yf_symbol).history(period="5d", interval="30m")
@@ -285,9 +233,9 @@ def get_sparkline_data(yf_symbol: str, n: int = 18) -> List[float]:
 def get_option_chain_nse_direct(symbol_nse: str) -> Optional[dict]:
     sym = symbol_nse.strip().upper()
 
-    # 0. Kite Connect — works from any IP when token is valid
+    # 1. Kite Connect — works from any IP when token is valid
     try:
-        from kite_api import get_option_chain_kite, is_connected as _kite_ok
+        from zerodha_api import get_option_chain_kite, is_connected as _kite_ok
         if _kite_ok():
             data = get_option_chain_kite(sym)
             if data and "records" in data:
@@ -295,18 +243,6 @@ def get_option_chain_nse_direct(symbol_nse: str) -> Optional[dict]:
                 return data
     except Exception as e:
         print(f"[Kite] OC attempt failed: {e}")
-
-    # 1. Dhan — dedicated endpoint, works from any IP
-    try:
-        from dhan_api import get_option_chain_for_symbol, _is_configured, _convert_dhan_oc_to_nse
-        if _is_configured():
-            raw = get_option_chain_for_symbol(sym)
-            if raw:
-                nse_fmt = _convert_dhan_oc_to_nse(raw)
-                if nse_fmt and "records" in nse_fmt:
-                    return nse_fmt
-    except Exception:
-        pass
 
     # 2. NSE direct — works from Indian IP
     if sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"):
