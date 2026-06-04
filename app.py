@@ -412,7 +412,9 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
 
     def _one(sym_key):
         sym = SYMBOLS.get(sym_key, {})
-        yf_s = sym.get("yf", "")
+        # yfinance special cases for index underlyings; equities use <SYMBOL>.NS
+        _yf_index = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
+        yf_s = sym.get("yf", "") or _yf_index.get(sym_key, f"{sym_key}.NS")
         if not yf_s:
             return sym_key, None
         try:
@@ -453,6 +455,17 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
         except concurrent.futures.TimeoutError:
             pass
     return results
+
+@st.cache_data(ttl=3600)
+def _load_kite_fo_symbols() -> tuple:
+    """Fetch full F&O underlying symbol list from Kite NFO instruments (cached 1h)."""
+    try:
+        syms = zerodha_api.get_fo_underlying_symbols()
+        # Filter out non-equity indices that don't have yfinance data
+        _skip = {"FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX50"}
+        return tuple(sorted(s for s in syms if s not in _skip))
+    except Exception:
+        return ()
 
 # Kite uses different instrument names for indices
 _KITE_INDEX_INST = {
@@ -1070,10 +1083,16 @@ with _oc_tab:
 #  SCANNER TAB
 # ══════════════════════════════════════════════
 with _scan_tab:
-    _fo_syms = tuple(sorted(
+    # Use full Zerodha F&O universe when Kite is connected, else fallback to SYMBOLS dict
+    _fo_syms_default = tuple(sorted(
         k for k, v in SYMBOLS.items()
         if v.get("nse") and not v.get("yf","").startswith(("CL=","NG=","GC=","SI=","^BSESN"))
     ))
+    if kite_live:
+        _fo_syms_kite = _load_kite_fo_symbols()
+        _fo_syms = _fo_syms_kite if _fo_syms_kite else _fo_syms_default
+    else:
+        _fo_syms = _fo_syms_default
 
     _sc_col1, _sc_col2, _sc_col3 = st.columns([3, 1, 4])
     with _sc_col1:
@@ -1086,7 +1105,8 @@ with _scan_tab:
         _scan_filter = st.radio("scan_sig_filter", ["All","BUY","SELL","HOLD"],
             horizontal=True, key="scan_filter_radio", label_visibility="collapsed")
 
-    st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · cached 2 min</div>', unsafe_allow_html=True)
+    _src_label = "Zerodha NFO universe" if kite_live else "SYMBOLS list"
+    st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · {_src_label} · cached 2 min</div>', unsafe_allow_html=True)
 
     with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):
         _scan_data = _load_scanner_signals(_fo_syms, _scan_tf)

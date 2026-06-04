@@ -702,6 +702,18 @@ def _get_nfo_instruments(underlying: str) -> list:
     return _nfo_cache.get(underlying.upper(), [])
 
 
+def get_fo_underlying_symbols() -> list:
+    """
+    Return sorted list of all unique F&O underlying symbols from Kite NFO instruments.
+    Triggers NFO instrument download if not already cached.
+    Typically ~180-200 symbols: equity stocks + indices (NIFTY, BANKNIFTY, etc.)
+    """
+    global _nfo_cache
+    if not _nfo_cache:
+        _get_nfo_instruments("NIFTY")  # loads entire NFO universe into _nfo_cache
+    return sorted(_nfo_cache.keys())
+
+
 def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]:
     """
     Build a full option chain for symbol_nse using Kite Connect.
