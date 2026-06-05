@@ -69,6 +69,8 @@ SECTOR_STOCKS = {
     "Consumer & Retail 🛍":["ZOMATO","DMART","TRENT","JUBLFOOD","DEVYANI","SAPPHIRE","NYKAA","INDHOTEL","EIHOTEL","LEMONTRE"],
     "Financial Services 📈":["BAJFINANCE","BAJAJFINSV","HDFCAMC","MUTHOOTFIN","CHOLAFIN","SBICARD","MANAPPURAM","IIFL","M&MFIN"],
 }
+# Flat deduplicated list of all stocks across every sector (used by Scanner)
+_SECTOR_UNIVERSE = tuple(sorted({s for stocks in SECTOR_STOCKS.values() for s in stocks}))
 
 SYMBOL_SHORT = {
     "NIFTY 50":   ("NIFTY50",   "Nifty 50 Index"),
@@ -1197,16 +1199,8 @@ with _oc_tab:
 #  SCANNER TAB
 # ══════════════════════════════════════════════
 with _scan_tab:
-    # Use full Zerodha F&O universe when Kite is connected, else fallback to SYMBOLS dict
-    _fo_syms_default = tuple(sorted(
-        k for k, v in SYMBOLS.items()
-        if v.get("nse") and not v.get("yf","").startswith(("CL=","NG=","GC=","SI=","^BSESN"))
-    ))
-    if kite_live:
-        _fo_syms_kite = _load_kite_fo_symbols()
-        _fo_syms = _fo_syms_kite if _fo_syms_kite else _fo_syms_default
-    else:
-        _fo_syms = _fo_syms_default
+    # Use curated sector universe (all stocks pinned in Sector Picks, deduplicated)
+    _fo_syms = _SECTOR_UNIVERSE
 
     _sc_col1, _sc_col2, _sc_col3 = st.columns([3, 1, 4])
     with _sc_col1:
@@ -1219,8 +1213,8 @@ with _scan_tab:
         _scan_filter = st.radio("scan_sig_filter", ["All","BUY","SELL","HOLD"],
             horizontal=True, key="scan_filter_radio", label_visibility="collapsed")
 
-    _src_label = "Zerodha Kite · live data" if kite_live else "Zerodha NFO list · Kite not connected"
-    st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · {_src_label} · cached 2 min</div>', unsafe_allow_html=True)
+    _src_label = "Zerodha Kite · live data" if kite_live else "Kite not connected"
+    st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} stocks across all sectors · {_scan_tf} · {_src_label} · cached 2 min</div>', unsafe_allow_html=True)
 
     with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):
         _scan_data = _load_scanner_signals(_fo_syms, _scan_tf, use_kite=kite_live)
