@@ -424,17 +424,31 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite:
     Compute RSI+MACD+Supertrend+VWAP signals for all listed F&O symbols.
     Uses Kite historical data when use_kite=True, yfinance otherwise.
     """
-    # When Kite is available, bulk-fetch all OHLCV from Kite
-    if use_kite and zerodha_api.is_connected():
-        ohlcv_map = zerodha_api.get_historical_data_bulk(list(symbols_tuple), timeframe, max_workers=5)
-    else:
-        ohlcv_map = {}
-
     _tf_map = {
         "1m":("1d","1m"), "3m":("1d","2m"), "5m":("1d","5m"),
         "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d"),
     }
     period, interval = _tf_map.get(timeframe, ("1d","5m"))
+
+    if use_kite and zerodha_api.is_connected():
+        ohlcv_map = zerodha_api.get_historical_data_bulk(list(symbols_tuple), timeframe, max_workers=5)
+    else:
+        # yfinance bulk fallback when Kite is offline
+        import yfinance as yf
+        _tickers = " ".join(f"{s}.NS" for s in symbols_tuple)
+        try:
+            _dl = yf.download(_tickers, period=period, interval=interval,
+                              group_by="ticker", threads=True, progress=False, auto_adjust=True)
+            ohlcv_map = {}
+            for _s in symbols_tuple:
+                try:
+                    _df = _dl[f"{_s}.NS"].dropna() if f"{_s}.NS" in _dl.columns.get_level_values(0) else pd.DataFrame()
+                    if not _df.empty:
+                        ohlcv_map[_s] = _df
+                except Exception:
+                    pass
+        except Exception:
+            ohlcv_map = {}
 
     def _one(sym_key):
         df = ohlcv_map.get(sym_key)
@@ -493,13 +507,28 @@ def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use_k
     RSI + MACD + Supertrend + VWAP + Volume spike.
     Uses Kite historical data when use_kite=True, yfinance otherwise.
     """
+    _tf_map = {"5m":("1d","5m"), "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d")}
+    period, interval = _tf_map.get(timeframe, ("5d","15m"))
+
     if use_kite and zerodha_api.is_connected():
         ohlcv_map = zerodha_api.get_historical_data_bulk(list(nse_symbols_tuple), timeframe, max_workers=5)
     else:
-        ohlcv_map = {}
-
-    _tf_map = {"5m":("1d","5m"), "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d")}
-    period, interval = _tf_map.get(timeframe, ("5d","15m"))
+        # yfinance bulk fallback when Kite is offline
+        import yfinance as yf
+        _tickers = " ".join(f"{s}.NS" for s in nse_symbols_tuple)
+        try:
+            _dl = yf.download(_tickers, period=period, interval=interval,
+                              group_by="ticker", threads=True, progress=False, auto_adjust=True)
+            ohlcv_map = {}
+            for _s in nse_symbols_tuple:
+                try:
+                    _df = _dl[f"{_s}.NS"].dropna() if f"{_s}.NS" in _dl.columns.get_level_values(0) else pd.DataFrame()
+                    if not _df.empty:
+                        ohlcv_map[_s] = _df
+                except Exception:
+                    pass
+        except Exception:
+            ohlcv_map = {}
 
     def _one(nse_sym):
         try:
