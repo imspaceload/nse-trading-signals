@@ -435,17 +435,7 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite:
     period, interval = _tf_map.get(timeframe, ("1d","5m"))
 
     def _one(sym_key):
-        # Prefer Kite OHLCV; fall back to yfinance
         df = ohlcv_map.get(sym_key)
-        if df is None or df.empty:
-            sym = SYMBOLS.get(sym_key, {})
-            _yf_index = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
-            yf_s = sym.get("yf", "") or _yf_index.get(sym_key, f"{sym_key}.NS")
-            try:
-                import yfinance as yf
-                df = yf.Ticker(yf_s).history(period=period, interval=interval)
-            except Exception:
-                return sym_key, None
         if df is None or df.empty or len(df) < 14:
             return sym_key, None
         try:
@@ -468,13 +458,10 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite:
         except Exception:
             return sym_key, None
 
-    # Process in parallel (OHLCV already fetched above for Kite path)
+    # Compute indicators for all Kite-fetched symbols in parallel (CPU-only, fast)
     results = {}
-    remaining = [k for k in symbols_tuple if k not in ohlcv_map or ohlcv_map[k].empty]
-    # Compute indicators for Kite-fetched data first (fast, no network)
-    kite_syms = [k for k in symbols_tuple if k in ohlcv_map and not ohlcv_map[k].empty]
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
-        futs = {ex.submit(_one, k): k for k in kite_syms + remaining}
+        futs = {ex.submit(_one, k): k for k in symbols_tuple}
         try:
             for fut in concurrent.futures.as_completed(futs, timeout=60):
                 try:
@@ -515,10 +502,6 @@ def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use_k
     def _one(nse_sym):
         try:
             df = ohlcv_map.get(nse_sym)
-            if df is None or df.empty:
-                yf_s = f"{nse_sym}.NS"
-                import yfinance as yf
-                df = yf.Ticker(yf_s).history(period=period, interval=interval)
             if df is None or df.empty or len(df) < 20:
                 return nse_sym, None
             spot = float(df["Close"].iloc[-1])
@@ -1220,7 +1203,7 @@ with _scan_tab:
         _scan_filter = st.radio("scan_sig_filter", ["All","BUY","SELL","HOLD"],
             horizontal=True, key="scan_filter_radio", label_visibility="collapsed")
 
-    _src_label = "Zerodha NFO universe" if kite_live else "SYMBOLS list"
+    _src_label = "Zerodha Kite · live data" if kite_live else "Zerodha NFO list · Kite not connected"
     st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · {_src_label} · cached 2 min</div>', unsafe_allow_html=True)
 
     with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):

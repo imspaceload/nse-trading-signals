@@ -394,26 +394,6 @@ def get_quotes(symbols: List[str], exchange: str = "NSE") -> dict:
 
 # ── Historical Data ────────────────────────────────────────────────────────
 
-# Pre-built token lookup for all NSE equities (populated on first scanner call)
-_nse_token_map: Dict[str, int] = {}
-_nse_token_map_at: float = 0
-
-def _get_nse_token_map() -> Dict[str, int]:
-    """Build/return a {tradingsymbol: instrument_token} dict for all NSE equities."""
-    global _nse_token_map, _nse_token_map_at
-    now = time.time()
-    if _nse_token_map and (now - _nse_token_map_at) < 86400:
-        return _nse_token_map
-    df = _load_instruments("NSE")
-    if df is None or df.empty:
-        return {}
-    eq = df[df["instrument_type"] == "EQ"][["tradingsymbol", "instrument_token"]]
-    _nse_token_map = dict(zip(eq["tradingsymbol"], eq["instrument_token"].astype(int)))
-    _nse_token_map.update(_INDEX_TOKENS)  # add index tokens
-    _nse_token_map_at = now
-    return _nse_token_map
-
-
 def get_historical_data_bulk(
     symbols: list,
     timeframe: str = "15m",
@@ -421,14 +401,14 @@ def get_historical_data_bulk(
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch OHLCV candles from Kite for multiple symbols in parallel.
-    Respects Kite's ~3 req/sec rate limit via throttling.
+    Uses get_instrument_token() per symbol (loads NSE instruments once, then cached).
+    Throttles to ~3 req/sec to respect Kite rate limits.
     Returns {symbol: DataFrame}.
     """
     kite = get_kite()
     if not kite:
         return {}
 
-    token_map = _get_nse_token_map()
     interval  = _TF_TO_KITE.get(timeframe, "15minute")
     days_back = _TF_DAYS_BACK.get(timeframe, 5)
     now_dt    = datetime.now(IST)
@@ -436,15 +416,17 @@ def get_historical_data_bulk(
     from_str  = from_dt.strftime("%Y-%m-%d %H:%M:%S")
     to_str    = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
+    # Pre-load NSE instrument tokens once for all symbols
+    _load_instruments("NSE")  # warms the cache used by get_instrument_token()
+
     _lock = threading.Lock()
     _last_call = [0.0]
-    _MIN_INTERVAL = 0.35  # ~3 req/sec
+    _MIN_INTERVAL = 0.35  # stay under Kite's 3 req/sec limit
 
     def _fetch_one(sym: str) -> tuple:
-        token = token_map.get(sym.upper()) or token_map.get(sym)
+        token = get_instrument_token(sym, "NSE")
         if not token:
             return sym, pd.DataFrame()
-        # Throttle to respect rate limit
         with _lock:
             elapsed = time.time() - _last_call[0]
             if elapsed < _MIN_INTERVAL:
@@ -452,7 +434,7 @@ def get_historical_data_bulk(
             _last_call[0] = time.time()
         try:
             data = kite.historical_data(token, from_str, to_str, interval,
-                                         continuous=False, oi=False)
+                                        continuous=False, oi=False)
             if not data:
                 return sym, pd.DataFrame()
             df = pd.DataFrame(data).rename(columns={
