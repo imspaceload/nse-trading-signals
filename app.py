@@ -1395,47 +1395,54 @@ with _picks_tab:
                     f'</div>'
                 )
 
-            st.markdown(f"""
-<div style="background:{_card_bg};border:1px solid {_card_bdr};border-left:3px solid {_card_acc};
-            border-radius:6px;padding:10px 12px;margin-bottom:8px;">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+            # Build option trade box separately (avoids f-string ternary issues)
+            if _dir in ("BUY", "SELL"):
+                _opt_box = (
+                    f'<div style="background:#0e0e1a;border:1px solid {_card_bdr};border-radius:5px;padding:8px 12px;min-width:180px;">'
+                    f'<div style="color:{_card_acc};font-size:0.58em;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;">Option Trade</div>'
+                    f'<div style="color:#e8e8e8;font-size:0.9em;font-weight:700;margin-top:2px;">{_sym} {_atm} {_opt_type}</div>'
+                    f'<div style="display:flex;gap:10px;margin-top:5px;font-size:0.68em;">'
+                    f'<span style="color:#6b7280;">Entry <span style="color:#e8e8e8;font-weight:600;">~&#8377;{_prem_est}</span></span>'
+                    f'<span style="color:#4caf50;">T &#8377;{_tgt_est}</span>'
+                    f'<span style="color:#ef4444;">SL &#8377;{_sl_est}</span>'
+                    f'</div>'
+                    f'<div style="color:#4b5563;font-size:0.55em;margin-top:3px;">Approx ATM premium · verify before trading</div>'
+                    f'</div>'
+                )
+            else:
+                _opt_box = '<div style="color:#6b7280;font-size:0.75em;padding:8px;">No clear option play — wait for stronger signal.</div>'
 
-    <div style="flex:1;min-width:160px;">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="color:#6b7280;font-size:0.58em;font-weight:700;">#{_rank}</span>
-        <span style="color:#e8e8e8;font-size:1.05em;font-weight:700;">{_sym}</span>
-        <span style="color:{_dir_c};font-size:0.65em;font-weight:800;background:{_card_bg};
-                     border:1px solid {_card_bdr};border-radius:10px;padding:1px 7px;">{_dir}</span>
-        {'<span style="color:#f59e0b;font-size:0.58em;font-weight:700;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:10px;padding:1px 6px;">⚡ VOL SPIKE</span>' if _vol_s else ''}
-      </div>
-      <div style="margin-top:3px;">
-        <span style="color:#e8e8e8;font-size:0.9em;font-weight:700;">₹{_spot:,.2f}</span>
-        <span style="color:{_dc};font-size:0.72em;margin-left:6px;">{_darr} {abs(_dpct):.2f}%</span>
-      </div>
-      <div style="margin-top:5px;display:flex;gap:3px;">{_dots}
-        <span style="color:#6b7280;font-size:0.6em;margin-left:4px;">{_score}/5 signals</span>
-      </div>
-    </div>
+            _vol_badge = '<span style="color:#f59e0b;font-size:0.58em;font-weight:700;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:10px;padding:1px 6px;">&#9889; VOL SPIKE</span>' if _vol_s else ''
 
-    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
-      {_ind_detail}
-    </div>
+            _card_html = (
+                f'<div style="background:{_card_bg};border:1px solid {_card_bdr};border-left:3px solid {_card_acc};'
+                f'border-radius:6px;padding:10px 12px;margin-bottom:8px;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">'
 
-    {'<div style="background:#0e0e1a;border:1px solid '+_card_bdr+';border-radius:5px;padding:8px 12px;min-width:180px;">'
-     '<div style="color:'+_card_acc+';font-size:0.58em;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;">Option Trade</div>'
-     '<div style="color:#e8e8e8;font-size:0.9em;font-weight:700;margin-top:2px;">'+_sym+' '+str(_atm)+' '+_opt_type+'</div>'
-     '<div style="display:flex;gap:10px;margin-top:5px;font-size:0.68em;">'
-     '<span style="color:#6b7280;">Entry <span style="color:#e8e8e8;font-weight:600;">~₹'+str(_prem_est)+'</span></span>'
-     '<span style="color:#4caf50;">T ₹'+str(_tgt_est)+'</span>'
-     '<span style="color:#ef4444;">SL ₹'+str(_sl_est)+'</span>'
-     '</div>'
-     '<div style="color:#4b5563;font-size:0.55em;margin-top:3px;">Approx ATM premium · verify before trading</div>'
-     '</div>'
-     if _dir in ("BUY","SELL") else
-     '<div style="color:#6b7280;font-size:0.75em;padding:8px;">No clear option play — wait for stronger signal.</div>'}
+                f'<div style="flex:1;min-width:160px;">'
+                f'<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span style="color:#6b7280;font-size:0.58em;font-weight:700;">#{_rank}</span>'
+                f'<span style="color:#e8e8e8;font-size:1.05em;font-weight:700;">{_sym}</span>'
+                f'<span style="color:{_dir_c};font-size:0.65em;font-weight:800;background:{_card_bg};'
+                f'border:1px solid {_card_bdr};border-radius:10px;padding:1px 7px;">{_dir}</span>'
+                f'{_vol_badge}'
+                f'</div>'
+                f'<div style="margin-top:3px;">'
+                f'<span style="color:#e8e8e8;font-size:0.9em;font-weight:700;">&#8377;{_spot:,.2f}</span>'
+                f'<span style="color:{_dc};font-size:0.72em;margin-left:6px;">{_darr} {abs(_dpct):.2f}%</span>'
+                f'</div>'
+                f'<div style="margin-top:5px;display:flex;gap:3px;">{_dots}'
+                f'<span style="color:#6b7280;font-size:0.6em;margin-left:4px;">{_score}/5 signals</span>'
+                f'</div>'
+                f'</div>'
 
-  </div>
-</div>""", unsafe_allow_html=True)
+                f'<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">{_ind_detail}</div>'
+
+                f'{_opt_box}'
+
+                f'</div></div>'
+            )
+            st.markdown(_card_html, unsafe_allow_html=True)
 
         if len(_sec_ranked) > 4:
             _rest = _sec_ranked[4:]
