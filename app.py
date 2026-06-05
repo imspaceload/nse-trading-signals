@@ -417,8 +417,17 @@ def _load_option_chain(nse_sym):
     return get_option_chain_nse_direct(nse_sym)
 
 @st.cache_data(ttl=120 if _mkt_open_now else 3600)
-def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
-    """Compute RSI+MACD+Supertrend+VWAP signals for all listed F&O symbols in parallel."""
+def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite: bool = False) -> dict:
+    """
+    Compute RSI+MACD+Supertrend+VWAP signals for all listed F&O symbols.
+    Uses Kite historical data when use_kite=True, yfinance otherwise.
+    """
+    # When Kite is available, bulk-fetch all OHLCV from Kite
+    if use_kite and zerodha_api.is_connected():
+        ohlcv_map = zerodha_api.get_historical_data_bulk(list(symbols_tuple), timeframe, max_workers=5)
+    else:
+        ohlcv_map = {}
+
     _tf_map = {
         "1m":("1d","1m"), "3m":("1d","2m"), "5m":("1d","5m"),
         "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d"),
@@ -426,17 +435,20 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
     period, interval = _tf_map.get(timeframe, ("1d","5m"))
 
     def _one(sym_key):
-        sym = SYMBOLS.get(sym_key, {})
-        # yfinance special cases for index underlyings; equities use <SYMBOL>.NS
-        _yf_index = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
-        yf_s = sym.get("yf", "") or _yf_index.get(sym_key, f"{sym_key}.NS")
-        if not yf_s:
+        # Prefer Kite OHLCV; fall back to yfinance
+        df = ohlcv_map.get(sym_key)
+        if df is None or df.empty:
+            sym = SYMBOLS.get(sym_key, {})
+            _yf_index = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
+            yf_s = sym.get("yf", "") or _yf_index.get(sym_key, f"{sym_key}.NS")
+            try:
+                import yfinance as yf
+                df = yf.Ticker(yf_s).history(period=period, interval=interval)
+            except Exception:
+                return sym_key, None
+        if df is None or df.empty or len(df) < 14:
             return sym_key, None
         try:
-            import yfinance as yf
-            df = yf.Ticker(yf_s).history(period=period, interval=interval)
-            if df.empty or len(df) < 14:
-                return sym_key, None
             spot = float(df["Close"].iloc[-1])
             rsi_d  = compute_rsi(df)
             macd_d = compute_macd(df)
@@ -456,15 +468,18 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m") -> dict:
         except Exception:
             return sym_key, None
 
+    # Process in parallel (OHLCV already fetched above for Kite path)
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as ex:
-        futs = {ex.submit(_one, k): k for k in symbols_tuple}
+    remaining = [k for k in symbols_tuple if k not in ohlcv_map or ohlcv_map[k].empty]
+    # Compute indicators for Kite-fetched data first (fast, no network)
+    kite_syms = [k for k in symbols_tuple if k in ohlcv_map and not ohlcv_map[k].empty]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+        futs = {ex.submit(_one, k): k for k in kite_syms + remaining}
         try:
-            for fut in concurrent.futures.as_completed(futs, timeout=55):
+            for fut in concurrent.futures.as_completed(futs, timeout=60):
                 try:
                     k, v = fut.result()
-                    if v:
-                        results[k] = v
+                    if v: results[k] = v
                 except Exception:
                     pass
         except concurrent.futures.TimeoutError:
@@ -483,21 +498,28 @@ def _load_kite_fo_symbols() -> tuple:
         return ()
 
 @st.cache_data(ttl=120 if _mkt_open_now else 3600)
-def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m") -> dict:
+def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use_kite: bool = False) -> dict:
     """
     Score each stock in a sector 0-5 for BUY/SELL conviction using
     RSI + MACD + Supertrend + VWAP + Volume spike.
-    Returns {nse_sym: {score, direction, buy_pts, sell_pts, spot, rsi, macd, supertrend, vwap, vol_spike, day_pct}}
+    Uses Kite historical data when use_kite=True, yfinance otherwise.
     """
+    if use_kite and zerodha_api.is_connected():
+        ohlcv_map = zerodha_api.get_historical_data_bulk(list(nse_symbols_tuple), timeframe, max_workers=5)
+    else:
+        ohlcv_map = {}
+
     _tf_map = {"5m":("1d","5m"), "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d")}
     period, interval = _tf_map.get(timeframe, ("5d","15m"))
 
     def _one(nse_sym):
-        yf_s = f"{nse_sym}.NS"
         try:
-            import yfinance as yf
-            df = yf.Ticker(yf_s).history(period=period, interval=interval)
-            if df.empty or len(df) < 20:
+            df = ohlcv_map.get(nse_sym)
+            if df is None or df.empty:
+                yf_s = f"{nse_sym}.NS"
+                import yfinance as yf
+                df = yf.Ticker(yf_s).history(period=period, interval=interval)
+            if df is None or df.empty or len(df) < 20:
                 return nse_sym, None
             spot = float(df["Close"].iloc[-1])
             rsi_d  = compute_rsi(df)
@@ -506,26 +528,21 @@ def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m") -> di
             vwap_d = compute_vwap(df)
 
             buy_pts = sell_pts = 0
-            # RSI
-            rsi_sig = (rsi_d.get("signal") or "NEUTRAL") if rsi_d else "NEUTRAL"
-            if rsi_sig == "BUY":  buy_pts  += 1
-            elif rsi_sig == "SELL": sell_pts += 1
-            # MACD
+            rsi_sig  = (rsi_d.get("signal")  or "NEUTRAL") if rsi_d  else "NEUTRAL"
             macd_sig = (macd_d.get("signal") or "NEUTRAL") if macd_d else "NEUTRAL"
+            vwap_sig = (vwap_d.get("signal") or "NEUTRAL") if vwap_d else "NEUTRAL"
+            if rsi_sig  == "BUY":  buy_pts  += 1
+            elif rsi_sig  == "SELL": sell_pts += 1
             if macd_sig == "BUY":  buy_pts  += 1
             elif macd_sig == "SELL": sell_pts += 1
-            # Supertrend
             if st_d:
                 if st_d.get("direction") == 1: buy_pts  += 1
                 else:                           sell_pts += 1
-            # VWAP
-            vwap_sig = (vwap_d.get("signal") or "NEUTRAL") if vwap_d else "NEUTRAL"
             if vwap_sig == "BUY":  buy_pts  += 1
             elif vwap_sig == "SELL": sell_pts += 1
-            # Volume spike (current bar vs 20-bar avg) — confirms whichever side is winning
             try:
-                avg_vol = float(df["Volume"].iloc[:-1].tail(20).mean())
-                cur_vol = float(df["Volume"].iloc[-1])
+                avg_vol   = float(df["Volume"].iloc[:-1].tail(20).mean())
+                cur_vol   = float(df["Volume"].iloc[-1])
                 vol_spike = avg_vol > 0 and cur_vol > avg_vol * 1.5
             except Exception:
                 vol_spike = False
@@ -535,14 +552,11 @@ def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m") -> di
 
             max_score = max(buy_pts, sell_pts)
             direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
-
             try:
                 day_pct = round((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100, 2)
             except Exception:
                 day_pct = 0.0
-
             rsi_val = round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0
-
             return nse_sym, {
                 "spot": round(spot, 2),
                 "buy_pts": buy_pts, "sell_pts": sell_pts,
@@ -1210,7 +1224,7 @@ with _scan_tab:
     st.markdown(f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 6px;">Scanning {len(_fo_syms)} F&O stocks · {_scan_tf} timeframe · {_src_label} · cached 2 min</div>', unsafe_allow_html=True)
 
     with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):
-        _scan_data = _load_scanner_signals(_fo_syms, _scan_tf)
+        _scan_data = _load_scanner_signals(_fo_syms, _scan_tf, use_kite=kite_live)
 
     _buys  = sum(1 for v in _scan_data.values() if v.get("signal") == "BUY")
     _sells = sum(1 for v in _scan_data.values() if v.get("signal") == "SELL")
@@ -1316,7 +1330,7 @@ with _picks_tab:
     )
 
     with st.spinner(f"Analysing {len(_sector_syms)} stocks..."):
-        _sec_data = _load_sector_signals(_sector_syms, _picks_tf)
+        _sec_data = _load_sector_signals(_sector_syms, _picks_tf, use_kite=kite_live)
 
     # Sort by score descending, then by direction (BUY before SELL before NEUTRAL)
     _dir_order = {"BUY": 0, "SELL": 1, "NEUTRAL": 2}

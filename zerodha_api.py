@@ -8,6 +8,7 @@ import csv
 import time
 import json
 import threading
+import concurrent.futures
 import requests as _requests
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
@@ -392,6 +393,92 @@ def get_quotes(symbols: List[str], exchange: str = "NSE") -> dict:
 
 
 # ── Historical Data ────────────────────────────────────────────────────────
+
+# Pre-built token lookup for all NSE equities (populated on first scanner call)
+_nse_token_map: Dict[str, int] = {}
+_nse_token_map_at: float = 0
+
+def _get_nse_token_map() -> Dict[str, int]:
+    """Build/return a {tradingsymbol: instrument_token} dict for all NSE equities."""
+    global _nse_token_map, _nse_token_map_at
+    now = time.time()
+    if _nse_token_map and (now - _nse_token_map_at) < 86400:
+        return _nse_token_map
+    df = _load_instruments("NSE")
+    if df is None or df.empty:
+        return {}
+    eq = df[df["instrument_type"] == "EQ"][["tradingsymbol", "instrument_token"]]
+    _nse_token_map = dict(zip(eq["tradingsymbol"], eq["instrument_token"].astype(int)))
+    _nse_token_map.update(_INDEX_TOKENS)  # add index tokens
+    _nse_token_map_at = now
+    return _nse_token_map
+
+
+def get_historical_data_bulk(
+    symbols: list,
+    timeframe: str = "15m",
+    max_workers: int = 5,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Fetch OHLCV candles from Kite for multiple symbols in parallel.
+    Respects Kite's ~3 req/sec rate limit via throttling.
+    Returns {symbol: DataFrame}.
+    """
+    kite = get_kite()
+    if not kite:
+        return {}
+
+    token_map = _get_nse_token_map()
+    interval  = _TF_TO_KITE.get(timeframe, "15minute")
+    days_back = _TF_DAYS_BACK.get(timeframe, 5)
+    now_dt    = datetime.now(IST)
+    from_dt   = now_dt - timedelta(days=days_back)
+    from_str  = from_dt.strftime("%Y-%m-%d %H:%M:%S")
+    to_str    = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    _lock = threading.Lock()
+    _last_call = [0.0]
+    _MIN_INTERVAL = 0.35  # ~3 req/sec
+
+    def _fetch_one(sym: str) -> tuple:
+        token = token_map.get(sym.upper()) or token_map.get(sym)
+        if not token:
+            return sym, pd.DataFrame()
+        # Throttle to respect rate limit
+        with _lock:
+            elapsed = time.time() - _last_call[0]
+            if elapsed < _MIN_INTERVAL:
+                time.sleep(_MIN_INTERVAL - elapsed)
+            _last_call[0] = time.time()
+        try:
+            data = kite.historical_data(token, from_str, to_str, interval,
+                                         continuous=False, oi=False)
+            if not data:
+                return sym, pd.DataFrame()
+            df = pd.DataFrame(data).rename(columns={
+                "date": "Datetime", "open": "Open", "high": "High",
+                "low": "Low", "close": "Close", "volume": "Volume",
+            }).set_index("Datetime")
+            df.index = pd.to_datetime(df.index)
+            return sym, df
+        except Exception:
+            return sym, pd.DataFrame()
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_one, s): s for s in symbols}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=120):
+                try:
+                    s, df = fut.result()
+                    if df is not None and not df.empty:
+                        results[s] = df
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            pass
+    return results
+
 
 def get_historical_data(
     symbol: str,
