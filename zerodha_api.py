@@ -147,8 +147,8 @@ _TF_DAYS_BACK = {
 
 # NSE symbol → instrument token cache
 _equity_token_cache: Dict[str, int] = {}
-_instruments_df: Optional[pd.DataFrame] = None
-_instruments_loaded_at: float = 0
+_instruments_cache: Dict[str, pd.DataFrame] = {}   # exchange → DataFrame
+_instruments_loaded_at: Dict[str, float] = {}       # exchange → timestamp
 
 
 def get_kite():
@@ -255,19 +255,19 @@ def complete_login(request_token: str) -> Optional[str]:
 # ── Instruments ────────────────────────────────────────────────────────────
 
 def _load_instruments(exchange: str = "NSE") -> Optional[pd.DataFrame]:
-    """Load instruments CSV from Kite (cached for 24h)."""
-    global _instruments_df, _instruments_loaded_at
+    """Load instruments CSV from Kite (per-exchange cache, 24h TTL)."""
+    global _instruments_cache, _instruments_loaded_at
     now = time.time()
-    if _instruments_df is not None and (now - _instruments_loaded_at) < 86400:
-        return _instruments_df
+    if exchange in _instruments_cache and (now - _instruments_loaded_at.get(exchange, 0)) < 86400:
+        return _instruments_cache[exchange]
     kite = get_kite()
     if not kite:
         return None
     try:
         rows = kite.instruments(exchange)
-        _instruments_df = pd.DataFrame(rows)
-        _instruments_loaded_at = now
-        return _instruments_df
+        _instruments_cache[exchange] = pd.DataFrame(rows)
+        _instruments_loaded_at[exchange] = now
+        return _instruments_cache[exchange]
     except Exception:
         return None
 
