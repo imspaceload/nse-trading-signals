@@ -160,7 +160,7 @@ textarea { background: #12121f !important; border: 1px solid #2a2a4a !important;
 """, unsafe_allow_html=True)
 
 # ── Session state defaults ──
-for _k, _v in [("active_symbol","NIFTY 50"), ("chart_tf","5m"), ("_wl_selected",None)]:
+for _k, _v in [("active_symbol","NIFTY 50"), ("chart_tf","5m"), ("_wl_selected",None), ("navigate_to_tab",None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -771,6 +771,22 @@ with left_col:
 
 with main_col:
     _chart_tab, _oc_tab, _scan_tab, _picks_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner", "🎯  Sector Picks"])
+    # Programmatic tab navigation (triggered from Sector Picks buttons)
+    _nav_to = st.session_state.get("navigate_to_tab")
+    if _nav_to is not None:
+        st.session_state.navigate_to_tab = None
+        import streamlit.components.v1 as _components
+        _components.html(f"""<script>
+        (function(){{
+            function _clickTab(){{
+                var lists = window.parent.document.querySelectorAll('[data-baseweb="tab-list"]');
+                if (!lists.length){{ setTimeout(_clickTab, 100); return; }}
+                var btns = lists[0].querySelectorAll('button[role="tab"]');
+                if (btns[{_nav_to}]) btns[{_nav_to}].click();
+            }}
+            setTimeout(_clickTab, 150);
+        }})();
+        </script>""", height=0)
 
 # ══════════════════════════════════════════════
 #  CHART TAB
@@ -1443,6 +1459,18 @@ with _picks_tab:
                 f'</div></div>'
             )
             st.markdown(_card_html, unsafe_allow_html=True)
+            # Action buttons — navigate to Chart or Option Chain for this stock
+            _ab1, _ab2, _ab_rest = st.columns([1, 1, 6])
+            with _ab1:
+                if st.button("📈 Chart", key=f"go_chart_{_sym}_{_rank}", use_container_width=True):
+                    st.session_state.active_symbol = _sym
+                    st.session_state.navigate_to_tab = 0
+                    st.rerun()
+            with _ab2:
+                if st.button("⛓ Chain", key=f"go_oc_{_sym}_{_rank}", use_container_width=True):
+                    st.session_state.active_symbol = _sym
+                    st.session_state.navigate_to_tab = 1
+                    st.rerun()
 
         if len(_sec_ranked) > 4:
             _rest = _sec_ranked[4:]
