@@ -55,6 +55,21 @@ SYMBOL_ALIASES = {
     "MM": "M&M", "BAJAJAUTO": "BAJAJ-AUTO",
 }
 
+# NSE F&O stocks grouped by sector (trading symbols)
+SECTOR_STOCKS = {
+    "Banking 🏦":          ["HDFCBANK","ICICIBANK","SBIN","KOTAKBANK","AXISBANK","INDUSINDBK","BANKBARODA","PNB","CANBK","FEDERALBNK","IDFCFIRSTB","BANDHANBNK"],
+    "IT / Tech 💻":        ["TCS","INFY","WIPRO","HCLTECH","TECHM","LTIM","MPHASIS","PERSISTENT","COFORGE","OFSS"],
+    "Auto 🚗":             ["TATAMOTORS","MARUTI","M&M","BAJAJ-AUTO","HEROMOTOCO","EICHERMOT","TVSMOTOR","ASHOKLEY","MOTHERSON","BALKRISIND"],
+    "Pharma 💊":           ["SUNPHARMA","DRREDDY","CIPLA","DIVISLAB","AUROPHARMA","TORNTPHARM","LUPIN","ALKEM","BIOCON","IPCALAB"],
+    "FMCG 🛒":             ["HINDUNILVR","ITC","NESTLEIND","BRITANNIA","MARICO","DABUR","GODREJCP","COLPAL","TATACONSUM","EMAMILTD"],
+    "Metal & Mining ⛏":   ["TATASTEEL","HINDALCO","JSWSTEEL","SAIL","VEDL","NMDC","NATIONALUM","HINDCOPPER","APLAPOLLO"],
+    "Energy & Oil ⚡":     ["RELIANCE","ONGC","BPCL","IOC","GAIL","PETRONET","MGL","IGL","TATAPOWER","ADANIGREEN"],
+    "Infrastructure 🏗":   ["LT","ULTRACEMCO","GRASIM","SHREECEM","ADANIPORTS","RVNL","IRFC","PFC","RECLTD","NTPC"],
+    "Telecom 📡":          ["BHARTIARTL","IDEA","INDUSTOWER"],
+    "Consumer & Retail 🛍":["ZOMATO","DMART","TRENT","JUBLFOOD","DEVYANI","SAPPHIRE","NYKAA","INDHOTEL","EIHOTEL","LEMONTRE"],
+    "Financial Services 📈":["BAJFINANCE","BAJAJFINSV","HDFCAMC","MUTHOOTFIN","CHOLAFIN","SBICARD","MANAPPURAM","IIFL","M&MFIN"],
+}
+
 SYMBOL_SHORT = {
     "NIFTY 50":   ("NIFTY50",   "Nifty 50 Index"),
     "BANK NIFTY": ("BANKNIFTY", "Nifty Bank Index"),
@@ -467,6 +482,92 @@ def _load_kite_fo_symbols() -> tuple:
     except Exception:
         return ()
 
+@st.cache_data(ttl=120 if _mkt_open_now else 3600)
+def _load_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m") -> dict:
+    """
+    Score each stock in a sector 0-5 for BUY/SELL conviction using
+    RSI + MACD + Supertrend + VWAP + Volume spike.
+    Returns {nse_sym: {score, direction, buy_pts, sell_pts, spot, rsi, macd, supertrend, vwap, vol_spike, day_pct}}
+    """
+    _tf_map = {"5m":("1d","5m"), "15m":("5d","15m"), "1h":("5d","60m"), "1D":("1mo","1d")}
+    period, interval = _tf_map.get(timeframe, ("5d","15m"))
+
+    def _one(nse_sym):
+        yf_s = f"{nse_sym}.NS"
+        try:
+            import yfinance as yf
+            df = yf.Ticker(yf_s).history(period=period, interval=interval)
+            if df.empty or len(df) < 20:
+                return nse_sym, None
+            spot = float(df["Close"].iloc[-1])
+            rsi_d  = compute_rsi(df)
+            macd_d = compute_macd(df)
+            st_d   = compute_supertrend(df)
+            vwap_d = compute_vwap(df)
+
+            buy_pts = sell_pts = 0
+            # RSI
+            rsi_sig = (rsi_d.get("signal") or "NEUTRAL") if rsi_d else "NEUTRAL"
+            if rsi_sig == "BUY":  buy_pts  += 1
+            elif rsi_sig == "SELL": sell_pts += 1
+            # MACD
+            macd_sig = (macd_d.get("signal") or "NEUTRAL") if macd_d else "NEUTRAL"
+            if macd_sig == "BUY":  buy_pts  += 1
+            elif macd_sig == "SELL": sell_pts += 1
+            # Supertrend
+            if st_d:
+                if st_d.get("direction") == 1: buy_pts  += 1
+                else:                           sell_pts += 1
+            # VWAP
+            vwap_sig = (vwap_d.get("signal") or "NEUTRAL") if vwap_d else "NEUTRAL"
+            if vwap_sig == "BUY":  buy_pts  += 1
+            elif vwap_sig == "SELL": sell_pts += 1
+            # Volume spike (current bar vs 20-bar avg) — confirms whichever side is winning
+            try:
+                avg_vol = float(df["Volume"].iloc[:-1].tail(20).mean())
+                cur_vol = float(df["Volume"].iloc[-1])
+                vol_spike = avg_vol > 0 and cur_vol > avg_vol * 1.5
+            except Exception:
+                vol_spike = False
+            if vol_spike:
+                if buy_pts > sell_pts:   buy_pts  += 1
+                elif sell_pts > buy_pts: sell_pts += 1
+
+            max_score = max(buy_pts, sell_pts)
+            direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
+
+            try:
+                day_pct = round((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100, 2)
+            except Exception:
+                day_pct = 0.0
+
+            rsi_val = round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0
+
+            return nse_sym, {
+                "spot": round(spot, 2),
+                "buy_pts": buy_pts, "sell_pts": sell_pts,
+                "score": max_score, "direction": direction,
+                "rsi": rsi_val, "macd": macd_sig,
+                "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
+                "vwap": vwap_sig, "vol_spike": vol_spike, "day_pct": day_pct,
+            }
+        except Exception:
+            return nse_sym, None
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        futs = {ex.submit(_one, s): s for s in nse_symbols_tuple}
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=50):
+                try:
+                    s, v = fut.result()
+                    if v: results[s] = v
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            pass
+    return results
+
 # Kite uses different instrument names for indices
 _KITE_INDEX_INST = {
     "NIFTY 50":       "NIFTY 50",
@@ -672,7 +773,7 @@ with left_col:
 
 
 with main_col:
-    _chart_tab, _oc_tab, _scan_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner"])
+    _chart_tab, _oc_tab, _scan_tab, _picks_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner", "🎯  Sector Picks"])
 
 # ══════════════════════════════════════════════
 #  CHART TAB
@@ -1187,6 +1288,176 @@ with _scan_tab:
 
         tbl += '</tbody></table>'
         st.markdown(tbl, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════
+#  SECTOR PICKS TAB
+# ══════════════════════════════════════════════
+with _picks_tab:
+    _pk_col1, _pk_col2, _pk_col3 = st.columns([4, 3, 1])
+    with _pk_col1:
+        _sector_choice = st.selectbox(
+            "sector", list(SECTOR_STOCKS.keys()),
+            key="sector_select", label_visibility="collapsed"
+        )
+    with _pk_col2:
+        _picks_tf = st.radio("picks_tf", ["5m","15m","1h","1D"],
+            index=1, horizontal=True, key="picks_tf_radio", label_visibility="collapsed")
+    with _pk_col3:
+        if st.button("⟳", key="picks_refresh"):
+            st.cache_data.clear(); st.rerun()
+
+    _sector_syms = tuple(SECTOR_STOCKS.get(_sector_choice, []))
+    st.markdown(
+        f'<div style="color:#6b7280;font-size:0.62em;padding:2px 0 8px;">'
+        f'Scoring {len(_sector_syms)} stocks in <b style="color:#e8e8e8;">{_sector_choice}</b> '
+        f'· {_picks_tf} · RSI + MACD + Supertrend + VWAP + Volume · cached 2 min</div>',
+        unsafe_allow_html=True
+    )
+
+    with st.spinner(f"Analysing {len(_sector_syms)} stocks..."):
+        _sec_data = _load_sector_signals(_sector_syms, _picks_tf)
+
+    # Sort by score descending, then by direction (BUY before SELL before NEUTRAL)
+    _dir_order = {"BUY": 0, "SELL": 1, "NEUTRAL": 2}
+    _sec_ranked = sorted(
+        _sec_data.items(),
+        key=lambda x: (-x[1]["score"], _dir_order.get(x[1]["direction"], 2))
+    )
+    _top4 = _sec_ranked[:4]
+
+    # Sector summary strip
+    _s_buys  = sum(1 for _, v in _sec_data.items() if v["direction"] == "BUY")
+    _s_sells = sum(1 for _, v in _sec_data.items() if v["direction"] == "SELL")
+    _s_neut  = len(_sec_data) - _s_buys - _s_sells
+    _sec_lean = "BULLISH" if _s_buys > _s_sells else ("BEARISH" if _s_sells > _s_buys else "NEUTRAL")
+    _lean_c   = "#4caf50" if _sec_lean == "BULLISH" else ("#ef4444" if _sec_lean == "BEARISH" else "#9ca3af")
+
+    st.markdown(f"""
+<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;
+            margin-bottom:10px;display:flex;align-items:center;gap:16px;">
+  <div><span style="color:#6b7280;font-size:0.58em;text-transform:uppercase;">Sector Bias</span>
+       <span style="color:{_lean_c};font-size:0.88em;font-weight:700;margin-left:6px;">{_sec_lean}</span></div>
+  <div style="display:flex;gap:10px;font-size:0.72em;">
+    <span style="color:#4caf50;">▲ {_s_buys} BUY</span>
+    <span style="color:#ef4444;">▼ {_s_sells} SELL</span>
+    <span style="color:#6b7280;">⏸ {_s_neut} NEUTRAL</span>
+    <span style="color:#4b5563;">of {len(_sec_data)} loaded</span>
+  </div>
+  <div style="margin-left:auto;color:#6b7280;font-size:0.6em;">Top 4 by signal strength →</div>
+</div>""", unsafe_allow_html=True)
+
+    if not _top4:
+        st.markdown('<div style="color:#6b7280;padding:20px;text-align:center;">No data loaded. Click ⟳ to scan.</div>', unsafe_allow_html=True)
+    else:
+        for _rank, (_sym, _sv) in enumerate(_top4, 1):
+            _dir   = _sv["direction"]
+            _score = _sv["score"]
+            _spot  = _sv["spot"]
+            _dpct  = _sv["day_pct"]
+            _vol_s = _sv["vol_spike"]
+
+            _dc    = "#4caf50" if _dpct >= 0 else "#ef4444"
+            _darr  = "▲" if _dpct >= 0 else "▼"
+            _dir_c = "#4caf50" if _dir == "BUY" else ("#ef4444" if _dir == "SELL" else "#9ca3af")
+            _card_bg   = "rgba(76,175,80,0.05)"  if _dir=="BUY"  else ("rgba(239,68,68,0.05)" if _dir=="SELL" else "rgba(18,18,31,1)")
+            _card_bdr  = "#1e4d1e" if _dir=="BUY" else ("#4d1e1e" if _dir=="SELL" else "#2a2a4a")
+            _card_acc  = "#4caf50" if _dir=="BUY" else ("#ef4444" if _dir=="SELL" else "#6b7280")
+
+            # Option recommendation
+            _step = (50 if _spot > 20000 else (100 if _spot > 5000 else (50 if _spot > 2000 else (10 if _spot > 500 else 5))))
+            _atm  = int(round(_spot / _step) * _step)
+            _opt_type = "CE" if _dir == "BUY" else ("PE" if _dir == "SELL" else "--")
+            _prem_est = round(_spot * 0.018, 1)   # ~1.8% of spot = rough ATM premium
+            _tgt_est  = round(_prem_est * 1.7, 1)  # 70% gain target
+            _sl_est   = round(_prem_est * 0.5, 1)  # 50% SL
+
+            # Signal dots (filled vs empty)
+            _ind_vals = [
+                ("RSI",  _sv["rsi"],        _sv["rsi"] < 30 or _sv["rsi"] > 70, _dir),
+                ("MACD", _sv["macd"],        _sv["macd"] == _dir,               _dir),
+                ("ST",   _sv["supertrend"], (_sv["supertrend"]=="BULL")==(_dir=="BUY"), _dir),
+                ("VWAP", _sv["vwap"],        _sv["vwap"] == _dir,               _dir),
+                ("VOL",  "SPIKE" if _vol_s else "AVG", _vol_s,                  _dir),
+            ]
+
+            _dots = ""
+            for _iname, _ival, _agrees, _d in _ind_vals:
+                _dc2 = _card_acc if _agrees else "#2a2a4a"
+                _dots += f'<span style="color:{_dc2};font-size:0.9em;" title="{_iname}: {_ival}">●</span>'
+
+            _ind_detail = ""
+            for _iname, _ival, _agrees, _d in _ind_vals:
+                _ic = _card_acc if _agrees else "#4b5563"
+                _iv_str = f"{_ival:.0f}" if isinstance(_ival, float) else str(_ival)
+                _ind_detail += (
+                    f'<div style="background:#0e0e1a;border:1px solid #2a2a4a;border-radius:4px;'
+                    f'padding:3px 7px;text-align:center;">'
+                    f'<div style="color:#6b7280;font-size:0.48em;text-transform:uppercase;">{_iname}</div>'
+                    f'<div style="color:{_ic};font-size:0.7em;font-weight:600;">{_iv_str}</div>'
+                    f'</div>'
+                )
+
+            st.markdown(f"""
+<div style="background:{_card_bg};border:1px solid {_card_bdr};border-left:3px solid {_card_acc};
+            border-radius:6px;padding:10px 12px;margin-bottom:8px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+
+    <div style="flex:1;min-width:160px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="color:#6b7280;font-size:0.58em;font-weight:700;">#{_rank}</span>
+        <span style="color:#e8e8e8;font-size:1.05em;font-weight:700;">{_sym}</span>
+        <span style="color:{_dir_c};font-size:0.65em;font-weight:800;background:{_card_bg};
+                     border:1px solid {_card_bdr};border-radius:10px;padding:1px 7px;">{_dir}</span>
+        {'<span style="color:#f59e0b;font-size:0.58em;font-weight:700;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:10px;padding:1px 6px;">⚡ VOL SPIKE</span>' if _vol_s else ''}
+      </div>
+      <div style="margin-top:3px;">
+        <span style="color:#e8e8e8;font-size:0.9em;font-weight:700;">₹{_spot:,.2f}</span>
+        <span style="color:{_dc};font-size:0.72em;margin-left:6px;">{_darr} {abs(_dpct):.2f}%</span>
+      </div>
+      <div style="margin-top:5px;display:flex;gap:3px;">{_dots}
+        <span style="color:#6b7280;font-size:0.6em;margin-left:4px;">{_score}/5 signals</span>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+      {_ind_detail}
+    </div>
+
+    {'<div style="background:#0e0e1a;border:1px solid '+_card_bdr+';border-radius:5px;padding:8px 12px;min-width:180px;">'
+     '<div style="color:'+_card_acc+';font-size:0.58em;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;">Option Trade</div>'
+     '<div style="color:#e8e8e8;font-size:0.9em;font-weight:700;margin-top:2px;">'+_sym+' '+str(_atm)+' '+_opt_type+'</div>'
+     '<div style="display:flex;gap:10px;margin-top:5px;font-size:0.68em;">'
+     '<span style="color:#6b7280;">Entry <span style="color:#e8e8e8;font-weight:600;">~₹'+str(_prem_est)+'</span></span>'
+     '<span style="color:#4caf50;">T ₹'+str(_tgt_est)+'</span>'
+     '<span style="color:#ef4444;">SL ₹'+str(_sl_est)+'</span>'
+     '</div>'
+     '<div style="color:#4b5563;font-size:0.55em;margin-top:3px;">Approx ATM premium · verify before trading</div>'
+     '</div>'
+     if _dir in ("BUY","SELL") else
+     '<div style="color:#6b7280;font-size:0.75em;padding:8px;">No clear option play — wait for stronger signal.</div>'}
+
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        if len(_sec_ranked) > 4:
+            _rest = _sec_ranked[4:]
+            with st.expander(f"All {len(_sec_ranked)} stocks in {_sector_choice}"):
+                _rest_tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.76em;">'
+                _rest_tbl += '<thead><tr style="background:#1e293b;"><th style="padding:4px 6px;text-align:left;color:#9ca3af;">STOCK</th><th style="padding:4px 6px;text-align:right;color:#9ca3af;">PRICE</th><th style="padding:4px 6px;text-align:center;color:#9ca3af;">SCORE</th><th style="padding:4px 6px;text-align:center;color:#9ca3af;">RSI</th><th style="padding:4px 6px;text-align:center;color:#9ca3af;">MACD</th><th style="padding:4px 6px;text-align:center;color:#9ca3af;">ST</th><th style="padding:4px 6px;text-align:center;color:#9ca3af;">SIGNAL</th></tr></thead><tbody>'
+                for _s, _v in _rest:
+                    _dc3 = "#4caf50" if _v["direction"]=="BUY" else ("#ef4444" if _v["direction"]=="SELL" else "#9ca3af")
+                    _rest_tbl += f'<tr style="border-bottom:1px solid rgba(42,42,74,0.2);">'
+                    _rest_tbl += f'<td style="padding:3px 6px;color:#e8e8e8;font-weight:600;">{_s}</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;color:#d1d5db;text-align:right;">₹{_v["spot"]:,.0f}</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;text-align:center;color:#fbbf24;">{_v["score"]}/5</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;text-align:center;color:#d1d5db;">{_v["rsi"]:.0f}</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;text-align:center;color:#d1d5db;">{_v["macd"]}</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;text-align:center;color:#d1d5db;">{_v["supertrend"]}</td>'
+                    _rest_tbl += f'<td style="padding:3px 6px;text-align:center;"><span style="color:{_dc3};font-weight:700;">{_v["direction"]}</span></td>'
+                    _rest_tbl += '</tr>'
+                _rest_tbl += '</tbody></table>'
+                st.markdown(_rest_tbl, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
