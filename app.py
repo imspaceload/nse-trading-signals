@@ -676,17 +676,15 @@ if not saved_watchlist:
 _quote_set = tuple(sorted(set(saved_watchlist) | {active_sym_key}))
 kite_quotes = _load_kite_quotes(_quote_set) if kite_live else {}
 
-wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
-wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
+if kite_live:
+    # Kite quotes already fetched above — use them directly, skip yfinance entirely
+    wl_prices  = {k: v["ltp"]  for k, v in kite_quotes.items() if v.get("ltp")}
+    wl_changes = {k: v["pct"]  for k, v in kite_quotes.items() if v.get("pct") is not None}
+else:
+    wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
+    wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
 
-# Override with real-time Kite data when available
-for _k, _qd in kite_quotes.items():
-    if _qd.get("ltp"):
-        wl_prices[_k]  = _qd["ltp"]
-    if _qd.get("pct") is not None:
-        wl_changes[_k] = _qd["pct"]
-
-# Also override index % changes from indices_data
+# Index % changes from indices_data when Kite not connected
 _idx_pct_keys = {
     "NIFTY 50": "NIFTY 50", "BANK NIFTY": "BANK NIFTY",
     "FIN NIFTY": "FIN NIFTY", "MIDCAP SELECT": "MIDCAP SELECT", "INDIA VIX": "INDIA VIX",
