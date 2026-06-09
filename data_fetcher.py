@@ -110,7 +110,7 @@ _IDX_ALIAS = {
 
 
 def get_nse_indices() -> dict:
-    data = _nse("https://www.nseindia.com/api/allIndices", timeout=8)
+    data = _nse("https://www.nseindia.com/api/allIndices", timeout=4)
     if not data:
         return {}
     out = {}

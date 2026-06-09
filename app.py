@@ -124,7 +124,7 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 1_000 if (is_market_open() and kite_live) else (15_000 if is_market_open() else 300_000)
+_refresh_ms = 3_000 if (is_market_open() and kite_live) else (30_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -306,7 +306,7 @@ def _ai_action(headline: str) -> str:
 # ── Cached loaders ──
 _mkt_open_now = is_market_open()
 
-@st.cache_data(ttl=45 if _mkt_open_now else 300)
+@st.cache_data(ttl=90 if _mkt_open_now else 300)
 def _load_indices():
     return get_nse_indices()
 
@@ -612,7 +612,7 @@ def _kite_nse_sym(sym_key: str, sym: dict) -> str:
     nse = sym.get("nse", "")
     return nse if nse and not sym.get("yf","").startswith(("CL=","NG=","GC=","SI=")) else ""
 
-@st.cache_data(ttl=1 if _mkt_open_now else 300)
+@st.cache_data(ttl=3 if _mkt_open_now else 300)
 def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     """
     Batch real-time quotes from Kite Connect for all given symbol keys.
@@ -638,7 +638,7 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     except Exception:
         return {}
 
-@st.cache_data(ttl=1 if _mkt_open_now else 300)
+@st.cache_data(ttl=3 if _mkt_open_now else 300)
 def _load_kite_chart(nse_sym: str, timeframe: str) -> pd.DataFrame:
     """Fetch real-time OHLCV candles from Kite Connect. Returns empty DataFrame on failure."""
     if not nse_sym:
