@@ -44,6 +44,17 @@ const SECTORS = [
   'Financial Services 📈',
 ];
 
+const TV_SYMBOL: Record<string, string> = {
+  'NIFTY 50':    'NSE:NIFTY',
+  'BANK NIFTY':  'NSE:BANKNIFTY',
+  'FIN NIFTY':   'NSE:FINNIFTY',
+  'SENSEX':      'BSE:SENSEX',
+  'INDIA VIX':   'NSE:INDIAVIX',
+};
+function toTvSymbol(sym: string) {
+  return TV_SYMBOL[sym] ?? `NSE:${sym.replace(/[^A-Z0-9&-]/gi, '').toUpperCase()}`;
+}
+
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '1h', '1D'];
 const TV_INT: Record<string, string> = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '1h': '60', '1D': 'D' };
 
@@ -433,7 +444,7 @@ export default function TradingTerminal() {
               <div style={{ flex: 1 }}>
                 <iframe
                   key={`${activeSymbol}-${chartTf}`}
-                  src={`https://s.tradingview.com/widgetembed/?symbol=NSE:${activeSymbol.replace(/ /g, '')}&interval=${TV_INT[chartTf] || '5'}&theme=dark&style=1&locale=en&toolbar_bg=%230a0a14&enable_publishing=0&hide_top_toolbar=0&hide_legend=0&save_image=0&hide_side_toolbar=0`}
+                  src={`https://s.tradingview.com/widgetembed/?symbol=${toTvSymbol(activeSymbol)}&interval=${TV_INT[chartTf] || '5'}&theme=dark&style=1&locale=en&toolbar_bg=%230a0a14&enable_publishing=0&hide_top_toolbar=0&hide_legend=0&save_image=0&hide_side_toolbar=0`}
                   style={{ width: '100%', height: '100%', border: 'none', minHeight: '500px' }}
                   allowFullScreen
                 />
