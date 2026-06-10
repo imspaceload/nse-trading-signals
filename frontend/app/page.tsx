@@ -80,7 +80,7 @@ function stBadge(st: string) {
 export default function TradingTerminal() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [activeSymbol, setActiveSymbol] = useState('NIFTY 50');
-  const [activeTab, setActiveTab] = useState<'chart' | 'optionchain' | 'scanner' | 'sectorpicks'>('chart');
+  const [activeTab, setActiveTab] = useState<'chart' | 'optionchain' | 'scanner' | 'sectorpicks' | 'smsadmin'>('chart');
   const [chartTf, setChartTf] = useState('5m');
   const [kiteConnected, setKiteConnected] = useState(false);
 
@@ -116,10 +116,22 @@ export default function TradingTerminal() {
   // Indices
   const [indices, setIndices] = useState<Record<string, { price: number; pct: number; change: number }>>({});
 
+  // ── Kite OAuth callback handler ──────────────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('action') === 'login' && params.get('request_token')) {
+      api.kiteCallback(params.get('request_token')!)
+        .then(() => { setKiteConnected(true); window.history.replaceState({}, '', '/'); })
+        .catch(() => {});
+    }
+  }, []);
+
   // ── Load initial data ────────────────────────────────────────────────────
 
   useEffect(() => {
     api.getHealth().then(h => setKiteConnected(h?.kite_connected ?? false)).catch(() => {});
+    // Poll health every 30s to detect Kite reconnection
+    const t = setInterval(() => api.getHealth().then(h => setKiteConnected(h?.kite_connected ?? false)).catch(() => {}), 30000);
     api.getWatchlist()
       .then((wl: string[]) => {
         if (Array.isArray(wl) && wl.length > 0) {
@@ -134,6 +146,7 @@ export default function TradingTerminal() {
     api.getIndices()
       .then(data => { if (data && typeof data === 'object') setIndices(data); })
       .catch(() => {});
+    return () => clearInterval(t);
   }, []);
 
   // Auto-refresh indices every 15s
@@ -263,6 +276,19 @@ export default function TradingTerminal() {
               {kiteConnected ? '● LIVE' : '● OFFLINE'}
             </span>
           </div>
+          {/* Kite connect button — shown when offline */}
+          {!kiteConnected && (
+            <button
+              onClick={() => api.kiteLoginUrl().then((d: {url: string}) => { if (d?.url) window.open(d.url, '_self'); }).catch(() => {})}
+              style={{
+                marginTop: '6px', width: '100%', background: '#1e3a5f',
+                border: '1px solid #2a4a6f', borderRadius: '5px', color: '#60a5fa',
+                fontSize: '0.68em', fontWeight: 700, padding: '5px 8px', cursor: 'pointer',
+              }}
+            >
+              🔑 Connect Zerodha Kite
+            </button>
+          )}
         </div>
 
         {/* Index strip */}
@@ -379,6 +405,7 @@ export default function TradingTerminal() {
             { key: 'optionchain', label: '⛓ Option Chain' },
             { key: 'scanner', label: '📊 Scanner' },
             { key: 'sectorpicks', label: '🎯 Sector Picks' },
+            { key: 'smsadmin', label: '📱 SMS Admin' },
           ] as const).map(t => (
             <button
               key={t.key}
