@@ -1,0 +1,16 @@
+[Unit]
+Description=NSE Trading Frontend (Next.js)
+After=network.target nse-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/nse-trading-signals/frontend
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+Environment=PORT=3000
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

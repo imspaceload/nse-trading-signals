@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.local
 .venv/
 venv/
 *.egg-info/
@@ -9,3 +10,5 @@ dist/
 build/
 .streamlit/secrets.toml
 .claude/
+frontend/node_modules/
+frontend/.next/
