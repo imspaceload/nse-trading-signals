@@ -447,40 +447,91 @@ def _pivot_from_df(df: pd.DataFrame, tf: str) -> dict:
     except Exception:
         return {}
 
+_BSE_SYM_MAP = {"SENSEX": "SENSEX"}  # app_key → BSE tradingsymbol
+
+def _kite_quote_result(data: dict) -> dict:
+    ltp = float(data["last_price"])
+    prev = float(data.get("ohlc", {}).get("close", ltp) or ltp)
+    chg  = round(ltp - prev, 2)
+    pct  = round(chg / prev * 100, 2) if prev else 0
+    return {"price": round(ltp, 2), "pct": pct, "change": chg}
+
 @app.get("/api/live/watchlist")
 def live_watchlist(keys: str = Query(..., description="Comma-separated app symbol keys")):
-    """Batch LTP+pct for all watchlist symbols in one Kite quotes call."""
+    """Batch LTP+pct for all watchlist symbols. Handles NSE indices, BSE (SENSEX), and MCX."""
     key_list = [k.strip() for k in keys.split(",") if k.strip()]
-    result = {}
-    if not key_list or not zerodha_api.is_connected():
-        return result
-    sym_map: dict = {}  # kite_sym → app_key
-    kite_syms: list = []
+    result: dict = {}
+
+    nse_map:  dict = {}   # kite_nse_sym → app_key
+    nse_syms: list = []
+    bse_map:  dict = {}   # kite_bse_sym → app_key
+    bse_syms: list = []
+    yf_keys:  list = []   # (app_key, yf_sym) for MCX / no-Kite symbols
+
     for k in key_list:
-        kite_sym, _, is_mcx = _resolve_sym(k)
-        if kite_sym and not is_mcx:
-            sym_map[kite_sym] = k
-            kite_syms.append(kite_sym)
-    if not kite_syms:
-        return result
-    try:
-        raw = zerodha_api.get_quotes(kite_syms)
-        for ksym, data in raw.items():
-            app_key = sym_map.get(ksym)
-            if app_key:
-                result[app_key] = {
-                    "price":  round(float(data["last_price"]), 2),
-                    "pct":    round(float(data.get("pct", 0)), 2),
-                    "change": round(float(data.get("change", 0)), 2),
-                }
-    except Exception:
-        pass
+        if k in _BSE_SYM_MAP:
+            bse_map[_BSE_SYM_MAP[k]] = k
+            bse_syms.append(_BSE_SYM_MAP[k])
+        else:
+            kite_sym, yf_sym, is_mcx = _resolve_sym(k)
+            if kite_sym and not is_mcx and zerodha_api.is_connected():
+                nse_map[kite_sym] = k
+                nse_syms.append(kite_sym)
+            elif yf_sym:
+                yf_keys.append((k, yf_sym))
+
+    # NSE batch (indices + equities)
+    if nse_syms and zerodha_api.is_connected():
+        try:
+            raw = zerodha_api.get_quotes(nse_syms)
+            for ksym, data in raw.items():
+                app_key = nse_map.get(ksym)
+                if app_key:
+                    result[app_key] = _kite_quote_result(data)
+        except Exception:
+            pass
+
+    # BSE batch (SENSEX)
+    if bse_syms and zerodha_api.is_connected():
+        try:
+            raw = zerodha_api.get_quotes(bse_syms, exchange="BSE")
+            for ksym, data in raw.items():
+                app_key = bse_map.get(ksym)
+                if app_key:
+                    result[app_key] = _kite_quote_result(data)
+        except Exception:
+            pass
+
+    # yfinance for MCX commodities and anything Kite can't serve
+    for app_key, yf_sym in yf_keys:
+        try:
+            fi = yf.Ticker(yf_sym).fast_info
+            ltp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
+            if ltp:
+                chg  = float(getattr(fi, "regularMarketChange", 0) or 0)
+                prev = float(ltp) - chg
+                pct  = round(chg / prev * 100, 2) if prev else 0
+                result[app_key] = {"price": round(float(ltp), 2), "pct": pct, "change": round(chg, 2)}
+        except Exception:
+            pass
+
     return result
 
 
 @app.get("/api/live/ltp")
 def live_ltp(key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' or 'RELIANCE'")):
     """Live last-traded price for chart JS polling. Sub-second Kite data when connected."""
+    # BSE symbols (SENSEX)
+    if key in _BSE_SYM_MAP and zerodha_api.is_connected():
+        try:
+            raw = zerodha_api.get_quotes([_BSE_SYM_MAP[key]], exchange="BSE")
+            bse_sym = _BSE_SYM_MAP[key]
+            if bse_sym in raw:
+                r = _kite_quote_result(raw[bse_sym])
+                return {"price": r["price"], "pct": r["pct"]}
+        except Exception:
+            pass
+
     kite_sym, yf_sym, is_mcx = _resolve_sym(key)
 
     if kite_sym and zerodha_api.is_connected():

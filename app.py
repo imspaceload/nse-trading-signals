@@ -613,31 +613,44 @@ def _kite_nse_sym(sym_key: str, sym: dict) -> str:
     nse = sym.get("nse", "")
     return nse if nse and not sym.get("yf","").startswith(("CL=","NG=","GC=","SI=")) else ""
 
+_BSE_WATCHLIST_SYMS = {"SENSEX": "SENSEX"}  # app_key → BSE tradingsymbol
+
 @st.cache_data(ttl=30 if _mkt_open_now else 300)
 def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     """
     Batch real-time quotes from Kite Connect for all given symbol keys.
     Returns {sym_key: {"ltp": float, "pct": float, "change": float}}.
-    One API call for all symbols — sub-second latency.
+    Handles NSE indices/equities and BSE (SENSEX) in separate calls.
     """
-    nse_syms, key_map = [], {}
+    nse_syms, nse_map = [], {}
+    bse_syms, bse_map = [], {}
     for k in symbols_tuple:
-        sym = SYMBOLS.get(k, _make_sym(k))
-        nse = _kite_nse_sym(k, sym)
-        if nse:
-            nse_syms.append(nse)
-            key_map[nse] = k
-    if not nse_syms:
+        if k in _BSE_WATCHLIST_SYMS:
+            bse_syms.append(_BSE_WATCHLIST_SYMS[k])
+            bse_map[_BSE_WATCHLIST_SYMS[k]] = k
+        else:
+            sym = SYMBOLS.get(k, _make_sym(k))
+            nse = _kite_nse_sym(k, sym)
+            if nse:
+                nse_syms.append(nse)
+                nse_map[nse] = k
+    if not nse_syms and not bse_syms:
         return {}
+    result = {}
     try:
-        raw = zerodha_api.get_quotes(nse_syms)
-        result = {}
-        for nse, data in raw.items():
-            k = key_map.get(nse, nse)
-            result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
-        return result
+        if nse_syms:
+            raw = zerodha_api.get_quotes(nse_syms)
+            for nse, data in raw.items():
+                k = nse_map.get(nse, nse)
+                result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
+        if bse_syms:
+            raw = zerodha_api.get_quotes(bse_syms, exchange="BSE")
+            for bse, data in raw.items():
+                k = bse_map.get(bse, bse)
+                result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
     except Exception:
-        return {}
+        return result
+    return result
 
 @st.cache_data(ttl=30 if _mkt_open_now else 300)
 def _load_kite_chart(nse_sym: str, timeframe: str) -> pd.DataFrame:
