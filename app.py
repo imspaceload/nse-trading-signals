@@ -926,10 +926,24 @@ with _chart_tab:
             _sig_border, _sig_accent = "#1e4d1e", "#4caf50"
             _sig_arrow, _sig_label = "▲", "BUY"
             if _has_fo:
-                _sig_msg = (
-                    f'Buy <b>{_nse_label} {_atm:,} CE</b>'
-                    f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Call</span>'
-                )
+                _opt_str = option_rec.get("strike", _atm) if option_rec else _atm
+                _opt_ltp = option_rec.get("ltp", 0) if option_rec else 0
+                _opt_tgt = option_rec.get("premium_target", 0) if option_rec else 0
+                _opt_sl  = option_rec.get("premium_sl", 0) if option_rec else 0
+                _opt_avg = round((_opt_ltp + _opt_tgt) / 2, 0) if _opt_ltp and _opt_tgt else 0
+                if _opt_ltp:
+                    _sig_msg = (
+                        f'BUY <b>{_nse_label} {int(_opt_str):,} CE</b>'
+                        f' &nbsp;@ <b style="color:#4caf50;font-size:1.05em;">₹{_opt_ltp:.0f}</b>'
+                        f' &nbsp;·&nbsp; <span style="color:#fbbf24;">Target ₹{_opt_tgt:.0f}</span>'
+                        f' &nbsp;·&nbsp; <span style="color:#fb923c;">Avg ₹{_opt_avg:.0f}</span>'
+                        f' &nbsp;·&nbsp; <span style="color:#ef4444;">SL ₹{_opt_sl:.0f}</span>'
+                    )
+                else:
+                    _sig_msg = (
+                        f'BUY <b>{_nse_label} {_atm:,} CE</b>'
+                        f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Call</span>'
+                    )
             else:
                 _sig_msg = f'Buy <b>{disp_short}</b> @ ₹{spot_price:,.0f}'
         elif action == "SELL":
@@ -939,10 +953,24 @@ with _chart_tab:
             _sig_border, _sig_accent = "#4d1e1e", "#ef4444"
             _sig_arrow, _sig_label = "▼", "SELL"
             if _has_fo:
-                _sig_msg = (
-                    f'Buy <b>{_nse_label} {_atm:,} PE</b>'
-                    f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Put</span>'
-                )
+                _opt_str = option_rec.get("strike", _atm) if option_rec else _atm
+                _opt_ltp = option_rec.get("ltp", 0) if option_rec else 0
+                _opt_tgt = option_rec.get("premium_target", 0) if option_rec else 0
+                _opt_sl  = option_rec.get("premium_sl", 0) if option_rec else 0
+                _opt_avg = round((_opt_ltp + _opt_tgt) / 2, 0) if _opt_ltp and _opt_tgt else 0
+                if _opt_ltp:
+                    _sig_msg = (
+                        f'SELL <b>{_nse_label} {int(_opt_str):,} PE</b>'
+                        f' &nbsp;@ <b style="color:#ef4444;font-size:1.05em;">₹{_opt_ltp:.0f}</b>'
+                        f' &nbsp;·&nbsp; <span style="color:#fbbf24;">Target ₹{_opt_tgt:.0f}</span>'
+                        f' &nbsp;·&nbsp; <span style="color:#fb923c;">Avg ₹{_opt_avg:.0f}</span>'
+                        f' &nbsp;·&nbsp; <span style="color:#ef4444;">SL ₹{_opt_sl:.0f}</span>'
+                    )
+                else:
+                    _sig_msg = (
+                        f'SELL <b>{_nse_label} {_atm:,} PE</b>'
+                        f' &nbsp;<span style="color:#6b7280;font-size:0.85em;">@ ₹{spot_price:,.0f} · ATM Put</span>'
+                    )
             else:
                 _sig_msg = f'Sell <b>{disp_short}</b> @ ₹{spot_price:,.0f}'
         else:
