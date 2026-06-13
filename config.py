@@ -79,6 +79,7 @@ SYMBOLS = {
     "VEDL":             {"yf": "VEDL.NS",         "nse": "VEDL",        "tv": "NSE:VEDL"},
     "TATACOMM":         {"yf": "TATACOMM.NS",     "nse": "TATACOMM",    "tv": "NSE:TATACOMM"},
     "DLF":              {"yf": "DLF.NS",          "nse": "DLF",         "tv": "NSE:DLF"},
+    "YESBANK":          {"yf": "YESBANK.NS",      "nse": "YESBANK",     "tv": "NSE:YESBANK"},
     "IDFCFIRSTB":       {"yf": "IDFCFIRSTB.NS",   "nse": "IDFCFIRSTB",  "tv": "NSE:IDFCFIRSTB"},
     "BHEL":             {"yf": "BHEL.NS",         "nse": "BHEL",        "tv": "NSE:BHEL"},
     "SAIL":             {"yf": "SAIL.NS",         "nse": "SAIL",        "tv": "NSE:SAIL"},
