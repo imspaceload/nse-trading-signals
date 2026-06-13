@@ -298,7 +298,7 @@ SYMBOLS = {
     "VIJAYA":           {"yf": "VIJAYA.NS",       "nse": "VIJAYA",      "tv": "NSE:VIJAYA"},
     # ── FMCG (additional) ──
     "JYOTHYLAB":        {"yf": "JYOTHYLAB.NS",    "nse": "JYOTHYLAB",   "tv": "NSE:JYOTHYLAB"},
-}
+    # ── Finance / Capital Markets ──
     "JIOFIN":           {"yf": "JIOFIN.NS",       "nse": "JIOFIN",      "tv": "NSE:JIOFIN"},
     "BAJAJHFL":         {"yf": "BAJAJHFL.NS",     "nse": "BAJAJHFL",    "tv": "NSE:BAJAJHFL"},
     "ANGELONE":         {"yf": "ANGELONE.NS",     "nse": "ANGELONE",    "tv": "NSE:ANGELONE"},
