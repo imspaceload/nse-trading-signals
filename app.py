@@ -273,7 +273,8 @@ def _df_to_lc_candles(df, timeframe: str) -> list:
             if timeframe == "1D":
                 t = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
             else:
-                t = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(pd.Timestamp(ts).timestamp())
+                _utc = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(pd.Timestamp(ts).timestamp())
+                t = _utc + 19800  # shift UTC → IST (+5:30) for chart display
             rows.append({
                 "time": t,
                 "open":  round(float(row["Open"]),  2),
@@ -770,6 +771,8 @@ with left_col:
         bg   = "background:rgba(56,126,209,0.07);" if act else ""
         nc   = "#60a5fa" if act else "#e8e8e8"
         sel  = "?wl_select=" + urllib.parse.quote_plus(wl_name)
+        _yf  = SYMBOLS.get(wl_name, {}).get("yf", "")
+        exch = "MCX" if _yf.startswith(("CL=","NG=","GC=","SI=")) else ("BSE" if _yf.startswith("^BSE") else "NSE")
         dl   = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
 
         # Single-line compact HTML — no blank lines so Markdown parser won't escape closing tags
@@ -777,7 +780,7 @@ with left_col:
             f'<div style="{bdr}{bg}display:flex;border-bottom:1px solid rgba(42,42,74,0.35);">'
             f'<a href="{sel}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;align-items:center;padding:10px 8px 10px 14px;">'
             f'<div><span style="display:block;color:{nc};font-size:0.82em;font-weight:600;">{fn}</span>'
-            f'<span style="color:#4b5563;font-size:0.57em;">NSE</span></div>'
+            f'<span style="color:#4b5563;font-size:0.57em;">{exch}</span></div>'
             f'<div style="text-align:right;"><span style="color:{clr};font-size:0.82em;font-weight:700;">{ps} {arr}</span><br>{sub}</div>'
             f'</a>'
             f'<a href="{dl}" style="color:#2d3748;font-size:0.75em;padding:0 8px;text-decoration:none;display:flex;align-items:center;">&#x2715;</a>'
@@ -1113,7 +1116,14 @@ with _oc_tab:
     nse_sym_oc = active_sym.get("nse","")
 
     if not nse_sym_oc:
-        st.info("Option chain not available for this instrument.")
+        _is_bse = active_sym.get("yf","").startswith("^BSE")
+        _is_mcx = active_sym.get("yf","").startswith(("CL=","NG=","GC=","SI="))
+        if _is_bse:
+            st.info("SENSEX options trade on BSE, not NSE. NSE option chain is not available for SENSEX.")
+        elif _is_mcx:
+            st.info("MCX commodities don't have options available in this terminal.")
+        else:
+            st.info("Option chain not available for this instrument.")
     else:
         oc_raw = _load_option_chain(nse_sym_oc)
         if oc_raw is None or "records" not in oc_raw:
