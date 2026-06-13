@@ -615,7 +615,7 @@ def _kite_nse_sym(sym_key: str, sym: dict) -> str:
     nse = sym.get("nse", "")
     return nse if nse and not sym.get("yf","").startswith(("CL=","NG=","GC=","SI=")) else ""
 
-@st.cache_data(ttl=3 if _mkt_open_now else 300)
+@st.cache_data(ttl=30 if _mkt_open_now else 300)
 def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     """
     Batch real-time quotes from Kite Connect for all given symbol keys.
@@ -822,45 +822,87 @@ with main_col:
         }})();
         </script>""", height=0)
 
+@st.cache_data(ttl=30 if _mkt_open_now else 300)
+def _load_chart_and_indicators(sym_key: str, nse_sym: str, yf_sym: str, timeframe: str):
+    """
+    Single cached call per (symbol, timeframe) — fetches OHLCV + computes all
+    indicators in one shot. Cache hit returns instantly (< 1 ms).
+    Cache miss triggers Kite API + ta-lib computations (~1-3 s, happens once per 30 s).
+    """
+    import yfinance as _yf
+    df = pd.DataFrame()
+    spot = None
+
+    # 1. Kite historical data (fast, authoritative)
+    if nse_sym and zerodha_api.is_connected():
+        try:
+            df = zerodha_api.get_historical_data(nse_sym, timeframe)
+            if df is not None and not df.empty:
+                spot = float(df["Close"].iloc[-1])
+        except Exception:
+            pass
+
+    # 2. yfinance fallback
+    if (df is None or df.empty) and yf_sym:
+        _period, _iv = {"1m":("5d","1m"),"3m":("5d","2m"),"5m":("5d","5m"),
+                        "15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}.get(timeframe, ("5d","5m"))
+        try:
+            _tmp = _yf.Ticker(yf_sym).history(period=_period, interval=_iv)
+            if _tmp is not None and not _tmp.empty:
+                df, spot = _tmp, float(_tmp["Close"].iloc[-1])
+        except Exception:
+            pass
+
+    data_ok = spot is not None and df is not None and not df.empty
+
+    rsi_d = macd_d = st_d = vwap_d = None
+    all_signals, pivots = [], {}
+    signal = {"action":"HOLD","buy_count":0,"sell_count":0,"target":None,"stop_loss":None}
+
+    if data_ok:
+        try:
+            rsi_d  = compute_rsi(df)
+            macd_d = compute_macd(df)
+            st_d   = compute_supertrend(df)
+            vwap_d = compute_vwap(df)
+            signal = generate_signal(rsi_d, macd_d, st_d, vwap_d, evaluate_oi(None), spot)
+            all_signals = compute_all_signals(df, timeframe)
+            pivots = compute_pivots(df, timeframe)
+        except Exception:
+            pass
+
+    return spot, df if df is not None else pd.DataFrame(), rsi_d, macd_d, st_d, vwap_d, signal, all_signals, pivots
+
+
+@st.cache_data(ttl=120 if _mkt_open_now else 600)
+def _get_option_rec_cached(nse_sym: str, atm_strike: int, action: str):
+    """Cache option recommendation — avoids NSE API call on every page load."""
+    try:
+        return get_option_recommendation(nse_sym, float(atm_strike), action)
+    except Exception:
+        return None
+
+
 # ══════════════════════════════════════════════
 #  CHART TAB
 # ══════════════════════════════════════════════
 with _chart_tab:
-    if kite_live:
-        # Kite for LTP; yfinance as OHLCV fallback so indicators always have data
-        spot_price = kite_quotes.get(active_sym_key, {}).get("ltp")
-        df = _load_kite_chart(active_sym.get("nse",""), st.session_state.chart_tf)
-        if df is None or df.empty:
-            _, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
-        if df is None:
-            df = pd.DataFrame()
-        if spot_price is None:
-            spot_price, _ = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
-    else:
-        spot_price, df = _load_spot_and_df(active_sym["yf"], active_sym.get("nse",""), st.session_state.chart_tf)
+    # Single cached call — returns instantly on warm cache
+    _chart_nse = active_sym.get("nse","")
+    _chart_yf  = active_sym.get("yf","")
+    _spot_cached, df, rsi_d, macd_d, st_d, vwap_d, signal, all_signals, pivots = \
+        _load_chart_and_indicators(active_sym_key, _chart_nse, _chart_yf, st.session_state.chart_tf)
+
+    # Always use the freshest Kite LTP when connected (kite_quotes already fetched above)
+    spot_price = (kite_quotes.get(active_sym_key, {}).get("ltp") or _spot_cached) if kite_live else _spot_cached
+
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
-    # Indicators & signals
-    action, signal = "HOLD", {"action":"HOLD","buy_count":0,"sell_count":0,"target":None,"stop_loss":None}
-    rsi_d = macd_d = st_d = vwap_d = oi_d = None
-    all_signals, option_rec = [], None
-
-    if data_ok:
-        try:
-            rsi_d   = compute_rsi(df)
-            macd_d  = compute_macd(df)
-            st_d    = compute_supertrend(df)
-            vwap_d  = compute_vwap(df)
-            oi_d    = evaluate_oi(None)
-            signal  = generate_signal(rsi_d, macd_d, st_d, vwap_d, oi_d, spot_price)
-            all_signals = compute_all_signals(df, st.session_state.chart_tf)
-            action  = signal["action"]
-            nse_sym = active_sym.get("nse","")
-            if action in ("BUY","SELL") and nse_sym:
-                try: option_rec = get_option_recommendation(nse_sym, spot_price, action)
-                except: pass
-        except Exception:
-            pass
+    action = signal.get("action", "HOLD")
+    option_rec = None
+    if data_ok and action in ("BUY","SELL") and _chart_nse:
+        _atm_key = _opt_strike(spot_price, active_sym_key)
+        option_rec = _get_option_rec_cached(_chart_nse, _atm_key, action)
 
     # Auto signal → trade → SMS (15-min cooldown)
     if data_ok and action in ("BUY","SELL") and is_market_open():
