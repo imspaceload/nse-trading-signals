@@ -1073,9 +1073,10 @@ with _chart_tab:
         if _pval and _pval > 0:
             _pl_js.append(f"cs.createPriceLine({{price:{_pval},color:'{_pclr}',lineWidth:1,lineStyle:{_pls},axisLabelVisible:true,title:'{_plbl}'}});")
 
-    _sym_js  = active_sym_key.replace("'", "\\'")
-    _tf_js   = st.session_state.chart_tf
-    _fb_ltp  = spot_price or 0
+    _sym_js      = active_sym_key.replace("'", "\\'")
+    _tf_js       = st.session_state.chart_tf
+    _fb_ltp      = spot_price or 0
+    _pivots_json = _json.dumps({k: v for k, v in pivots.items() if v and v > 0})
     _chart_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>*{{margin:0;padding:0;box-sizing:border-box;}}html,body{{background:#131722;overflow:hidden;width:100%;height:490px;}}</style>
@@ -1088,7 +1089,7 @@ const TF     = '{_tf_js}';
 // Embedded fallback — chart shows immediately even before API is available
 const INIT_CANDLES = {_lc_json};
 const INIT_LTP     = {_fb_ltp};
-const INIT_PIVOTS  = {_json.dumps({{k:v for k,v in pivots.items() if v and v > 0}})};
+const INIT_PIVOTS  = {_pivots_json};
 
 const chart = LightweightCharts.createChart(document.getElementById('c'), {{
   width: window.innerWidth, height: 490,
