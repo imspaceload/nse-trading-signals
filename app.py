@@ -1194,6 +1194,15 @@ async function poll(){{
 poll();
 setInterval(poll,2000);
 </script></body></html>""", height=48)
+        _oc_btn_html = ""
+        if _has_fo:
+            _oc_btn_html = (
+                '<button onclick="(function(){var l=window.parent.document.querySelectorAll(\'[data-baseweb=tab-list]\');'
+                'if(l.length){var b=l[0].querySelectorAll(\'button[role=tab]\');if(b[1])b[1].click();}})()" '
+                'style="background:rgba(56,126,209,0.12);border:1px solid rgba(56,126,209,0.3);color:#60a5fa;'
+                'border-radius:4px;padding:3px 10px;font-size:0.62em;cursor:pointer;white-space:nowrap;'
+                'font-family:Inter,sans-serif;">⛓ View Options</button>'
+            )
         st.markdown(f"""<div style="background:{_sig_bg};border:1px solid {_sig_border};border-left:3px solid {_sig_accent};
             border-radius:6px;padding:8px 10px 8px;margin:5px 0 3px;">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1204,7 +1213,7 @@ setInterval(poll,2000);
         Target avg ₹{_avg:,.0f} &nbsp;·&nbsp; PP ₹{pivots.get("PP",0):,.0f}
       </div>
     </div>
-    <div style="display:flex;gap:5px;flex-wrap:wrap;">{_levels_html}</div>
+    <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">{_levels_html}&nbsp;{_oc_btn_html}</div>
   </div>
 </div>""", unsafe_allow_html=True)
     else:
@@ -1375,11 +1384,25 @@ with _oc_tab:
         else:
             st.info("Option chain not available for this instrument.")
     else:
-        oc_raw = _load_option_chain(nse_sym_oc)
+        with st.spinner(f"Loading option chain for {nse_sym_oc}…"):
+            oc_raw = _load_option_chain(nse_sym_oc)
         if oc_raw is None or "records" not in oc_raw:
-            st.markdown(f'<div style="color:#f59e0b;font-size:0.76em;padding:8px 2px;">⟳ Could not load option chain for {nse_sym_oc}. Check Kite connection or retry.</div>', unsafe_allow_html=True)
-            if st.button("Retry", key="oc_retry"):
-                st.cache_data.clear(); st.rerun()
+            st.markdown(
+                f'<div style="background:#1a1200;border:1px solid #4a3500;border-radius:6px;padding:12px 14px;margin:8px 0;">'
+                f'<div style="color:#fbbf24;font-size:0.8em;font-weight:600;margin-bottom:4px;">⚠ Option chain unavailable for {nse_sym_oc}</div>'
+                f'<div style="color:#9ca3af;font-size:0.72em;">Possible reasons: Kite session expired, market is closed, or NSE API is unreachable.</div>'
+                f'<div style="color:#9ca3af;font-size:0.72em;margin-top:4px;">Try refreshing — Kite option chain requires a valid access token.</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            c1, c2 = st.columns([1, 6])
+            with c1:
+                if st.button("⟳ Retry", key="oc_retry"):
+                    st.cache_data.clear(); st.rerun()
+            with c2:
+                if kite_configured and not kite_live:
+                    _oc_login_url = zerodha_api.get_login_url()
+                    st.markdown(f'<a href="{_oc_login_url}" target="_blank" style="background:#7c3aed;color:white;padding:5px 14px;border-radius:5px;font-size:0.75em;font-weight:700;text-decoration:none;">🔑 Re-login Kite</a>', unsafe_allow_html=True)
         else:
             records      = oc_raw["records"]
             expiry_dates = records.get("expiryDates", [])
