@@ -358,6 +358,65 @@ def get_ltp(symbol: str, exchange: str = "NSE") -> Optional[float]:
     return None
 
 
+_mcx_active_cache: Dict[str, tuple] = {}  # commodity → (tradingsymbol, expiry_ts)
+
+def get_mcx_active_symbol(commodity: str) -> Optional[str]:
+    """Return the nearest-expiry MCX futures tradingsymbol for a commodity (e.g. 'CRUDEOIL').
+    Result is cached until the contract expiry, then re-looked up automatically."""
+    import time
+    now = time.time()
+    cached = _mcx_active_cache.get(commodity)
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        df = _load_instruments("MCX")
+        if df is None or df.empty:
+            return None
+        mask = (
+            df["tradingsymbol"].str.upper().str.startswith(commodity.upper()) &
+            (df["instrument_type"].str.upper() == "FUT")
+        )
+        futures = df[mask].copy()
+        if futures.empty:
+            return None
+        futures["_exp"] = pd.to_datetime(futures["expiry"])
+        futures = futures[futures["_exp"] >= pd.Timestamp.now()]
+        if futures.empty:
+            return None
+        row = futures.nsmallest(1, "_exp").iloc[0]
+        sym = str(row["tradingsymbol"])
+        exp_ts = float(row["_exp"].timestamp())
+        _mcx_active_cache[commodity] = (sym, exp_ts)
+        return sym
+    except Exception:
+        return None
+
+
+def get_mcx_ltp(commodity: str) -> Optional[dict]:
+    """Get live LTP + pct change for an MCX commodity (e.g. 'CRUDEOIL').
+    Returns {price, pct, change} in INR, or None if unavailable."""
+    kite = get_kite()
+    if not kite:
+        return None
+    sym = get_mcx_active_symbol(commodity)
+    if not sym:
+        return None
+    key = f"MCX:{sym}"
+    try:
+        raw = kite.quote([key])
+        if key not in raw:
+            return None
+        d = raw[key]
+        ltp = float(d["last_price"])
+        ohlc = d.get("ohlc", {})
+        prev = float(ohlc.get("close", ltp) or ltp)
+        chg  = round(ltp - prev, 2)
+        pct  = round(chg / prev * 100, 2) if prev else 0
+        return {"price": round(ltp, 2), "pct": pct, "change": chg}
+    except Exception:
+        return None
+
+
 def get_quotes(symbols: List[str], exchange: str = "NSE") -> dict:
     """
     Get full quote (OHLC + LTP) for multiple symbols.

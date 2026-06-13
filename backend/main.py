@@ -502,8 +502,18 @@ def live_watchlist(keys: str = Query(..., description="Comma-separated app symbo
         except Exception:
             pass
 
-    # yfinance for MCX commodities and anything Kite can't serve
+    # MCX commodities via Kite active contract lookup
     for app_key, yf_sym in yf_keys:
+        mcx_commodity = SYMBOLS.get(app_key, {}).get("mcx", "")
+        if mcx_commodity and zerodha_api.is_connected():
+            try:
+                d = zerodha_api.get_mcx_ltp(mcx_commodity)
+                if d:
+                    result[app_key] = d
+                    continue
+            except Exception:
+                pass
+        # yfinance fallback (international price)
         try:
             fi = yf.Ticker(yf_sym).fast_info
             ltp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
@@ -534,6 +544,16 @@ def live_ltp(key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' o
 
     kite_sym, yf_sym, is_mcx = _resolve_sym(key)
 
+    # MCX commodity — look up active futures contract
+    mcx_commodity = SYMBOLS.get(key, {}).get("mcx", "")
+    if mcx_commodity and zerodha_api.is_connected():
+        try:
+            d = zerodha_api.get_mcx_ltp(mcx_commodity)
+            if d:
+                return {"price": d["price"], "pct": d["pct"]}
+        except Exception:
+            pass
+
     if kite_sym and zerodha_api.is_connected():
         try:
             raw = zerodha_api.get_quotes([kite_sym])
@@ -545,12 +565,13 @@ def live_ltp(key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' o
 
     # yfinance fallback
     try:
-        import yfinance as yf
         fi = yf.Ticker(yf_sym).fast_info
         ltp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
         if ltp:
-            pct = getattr(fi, "regularMarketChangePercent", 0) or 0
-            return {"price": round(float(ltp), 2), "pct": round(float(pct), 2)}
+            chg  = float(getattr(fi, "regularMarketChange", 0) or 0)
+            prev = float(ltp) - chg
+            pct  = round(chg / prev * 100, 2) if prev else 0
+            return {"price": round(float(ltp), 2), "pct": pct}
     except Exception:
         pass
 

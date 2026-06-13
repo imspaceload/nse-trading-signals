@@ -650,6 +650,16 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
                 result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
     except Exception:
         return result
+    # MCX commodities via active futures contract
+    for k in symbols_tuple:
+        mcx_commodity = SYMBOLS.get(k, {}).get("mcx", "")
+        if mcx_commodity:
+            try:
+                d = zerodha_api.get_mcx_ltp(mcx_commodity)
+                if d:
+                    result[k] = {"ltp": d["price"], "pct": d["pct"], "change": d["change"]}
+            except Exception:
+                pass
     return result
 
 @st.cache_data(ttl=30 if _mkt_open_now else 300)

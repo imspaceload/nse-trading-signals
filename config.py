@@ -15,11 +15,11 @@ SYMBOLS = {
     "MIDCAP SELECT":    {"yf": "^NSEMDCP50",      "nse": "MIDCPNIFTY",  "tv": "NSE:MIDCPNIFTY"},
     "SENSEX":           {"yf": "^BSESN",          "nse": "",            "tv": "BSE:SENSEX"},
     "INDIA VIX":        {"yf": "^INDIAVIX",       "nse": "",            "tv": "NSE:INDIAVIX"},
-    # ── Commodities ──
-    "MCX CRUDE OIL":    {"yf": "CL=F",            "nse": "",            "tv": "MCX:CRUDEOIL1!"},
-    "MCX NATURAL GAS":  {"yf": "NG=F",            "nse": "",            "tv": "MCX:NATURALGAS1!"},
-    "MCX GOLD":         {"yf": "GC=F",            "nse": "",            "tv": "MCX:GOLD1!"},
-    "MCX SILVER":       {"yf": "SI=F",            "nse": "",            "tv": "MCX:SILVER1!"},
+    # ── Commodities (MCX) ──
+    "MCX CRUDE OIL":    {"yf": "CL=F",            "nse": "",  "mcx": "CRUDEOIL",   "tv": "MCX:CRUDEOIL1!"},
+    "MCX NATURAL GAS":  {"yf": "NG=F",            "nse": "",  "mcx": "NATURALGAS", "tv": "MCX:NATURALGAS1!"},
+    "MCX GOLD":         {"yf": "GC=F",            "nse": "",  "mcx": "GOLD",       "tv": "MCX:GOLD1!"},
+    "MCX SILVER":       {"yf": "SI=F",            "nse": "",  "mcx": "SILVER",     "tv": "MCX:SILVER1!"},
     # ── NIFTY 50 Stocks ──
     "RELIANCE":         {"yf": "RELIANCE.NS",     "nse": "RELIANCE",    "tv": "NSE:RELIANCE"},
     "TCS":              {"yf": "TCS.NS",          "nse": "TCS",         "tv": "NSE:TCS"},
