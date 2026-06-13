@@ -124,8 +124,6 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-# Chart iframe self-updates via /api/live/* polling — no need for 3s full-page refresh.
-# 30s is enough to recalculate indicators; prices update in chart JS every 1s.
 _refresh_ms = 30_000 if (is_market_open() and kite_live) else (30_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
@@ -1982,7 +1980,7 @@ with tab_sms:
 st.markdown(
     f'<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
     f'For educational purposes only. Not financial advice. '
-    f'Auto-refreshes every {"1s" if (mkt_open and kite_live) else "15s" if mkt_open else "5min"}.'
+    f'Auto-refreshes every {"30s" if (mkt_open and kite_live) else "30s" if mkt_open else "5min"}.'
     f'</div>',
     unsafe_allow_html=True,
 )
