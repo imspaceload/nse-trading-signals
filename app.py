@@ -124,7 +124,9 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 3_000 if (is_market_open() and kite_live) else (30_000 if is_market_open() else 300_000)
+# Chart iframe self-updates via /api/live/* polling — no need for 3s full-page refresh.
+# 30s is enough to recalculate indicators; prices update in chart JS every 1s.
+_refresh_ms = 30_000 if (is_market_open() and kite_live) else (30_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -639,7 +641,7 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
     except Exception:
         return {}
 
-@st.cache_data(ttl=3 if _mkt_open_now else 300)
+@st.cache_data(ttl=30 if _mkt_open_now else 300)
 def _load_kite_chart(nse_sym: str, timeframe: str) -> pd.DataFrame:
     """Fetch real-time OHLCV candles from Kite Connect. Returns empty DataFrame on failure."""
     if not nse_sym:
@@ -1071,12 +1073,20 @@ with _chart_tab:
         if _pval and _pval > 0:
             _pl_js.append(f"cs.createPriceLine({{price:{_pval},color:'{_pclr}',lineWidth:1,lineStyle:{_pls},axisLabelVisible:true,title:'{_plbl}'}});")
 
+    # Chart HTML is STATIC (only symbol + TF embedded).
+    # All data (candles, LTP, pivots) is fetched by chart JS via /api/live/* endpoints.
+    # This means the iframe is NOT recreated on every Streamlit refresh — no more flash.
+    _sym_js  = active_sym_key.replace("'", "\\'")
+    _tf_js   = st.session_state.chart_tf
     _chart_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>*{{margin:0;padding:0;box-sizing:border-box;}}html,body{{background:#131722;overflow:hidden;width:100%;height:490px;}}</style>
 </head><body>
 <div id="c" style="width:100%;height:490px;"></div>
 <script>
+const SYMBOL = '{_sym_js}';
+const TF     = '{_tf_js}';
+
 const chart = LightweightCharts.createChart(document.getElementById('c'), {{
   width: window.innerWidth, height: 490,
   layout: {{ background:{{type:'solid',color:'#131722'}}, textColor:'#9ca3af', fontSize:11 }},
@@ -1090,9 +1100,58 @@ const cs = chart.addCandlestickSeries({{
   borderUpColor:'#4caf50', borderDownColor:'#ef4444',
   wickUpColor:'#4caf50', wickDownColor:'#ef4444',
 }});
-const data = {_lc_json};
-if (data.length > 0) {{ cs.setData(data); chart.timeScale().fitContent(); }}
-{''.join(_pl_js)}
+
+let ltpLine  = null;
+let pivotLines = {{}};
+let candlesLoaded = false;
+
+const PIVOT_COLORS = {{R2:'#ef4444',R1:'#f97316',PP:'#fbbf24',S1:'#22c55e',S2:'#16a34a'}};
+const PIVOT_STYLES = {{R2:2,R1:2,PP:1,S1:2,S2:2}};
+
+async function loadCandles() {{
+  try {{
+    const r = await fetch('/api/live/candles?key=' + encodeURIComponent(SYMBOL) + '&tf=' + TF, {{cache:'no-store'}});
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.candles && d.candles.length > 0) {{
+      cs.setData(d.candles);
+      if (!candlesLoaded) {{ chart.timeScale().fitContent(); candlesLoaded = true; }}
+    }}
+    // Draw / update pivot lines
+    Object.keys(pivotLines).forEach(k => cs.removePriceLine(pivotLines[k]));
+    pivotLines = {{}};
+    if (d.pivots) {{
+      Object.entries(d.pivots).forEach(([k, v]) => {{
+        if (v && v > 0) {{
+          pivotLines[k] = cs.createPriceLine({{
+            price: v, color: PIVOT_COLORS[k]||'#9ca3af',
+            lineWidth: 1, lineStyle: PIVOT_STYLES[k]||2,
+            axisLabelVisible: true, title: k,
+          }});
+        }}
+      }});
+    }}
+  }} catch(e) {{}}
+}}
+
+async function updateLTP() {{
+  try {{
+    const r = await fetch('/api/live/ltp?key=' + encodeURIComponent(SYMBOL), {{cache:'no-store'}});
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.price && d.price > 0) {{
+      if (!ltpLine) {{
+        ltpLine = cs.createPriceLine({{price:d.price,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
+      }} else {{
+        ltpLine.applyOptions({{price:d.price}});
+      }}
+    }}
+  }} catch(e) {{}}
+}}
+
+loadCandles();
+setInterval(updateLTP,    1000);   // LTP price line updates every 1 second
+setInterval(loadCandles, 30000);   // Candles + pivots refresh every 30 seconds
 window.addEventListener('resize', () => chart.resize(window.innerWidth, 490));
 </script></body></html>"""
 

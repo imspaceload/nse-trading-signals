@@ -28,6 +28,7 @@ if os.path.exists(_env_path):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 import zerodha_api
+from config import SYMBOLS
 from data_fetcher import get_nse_indices, is_market_open, get_option_chain_nse_direct
 from news_scraper import scrape_moneycontrol_news
 from sms_sender import get_watchlist, add_to_watchlist, remove_from_watchlist
@@ -391,6 +392,142 @@ def kite_callback(body: KiteCallback):
     if token:
         return {"success": True, "message": "Kite login successful"}
     raise HTTPException(status_code=400, detail="Kite login failed — invalid request token")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  LIVE CHART ENDPOINTS (used by chart iframe to self-update without page reload)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps app-key → Kite instrument string for indices
+_LIVE_INDEX_MAP = {
+    "NIFTY 50":       "NIFTY 50",
+    "BANK NIFTY":     "NIFTY BANK",
+    "FIN NIFTY":      "NIFTY FIN SERVICE",
+    "MIDCAP SELECT":  "NIFTY MID SELECT",
+    "INDIA VIX":      "INDIA VIX",
+    "SENSEX":         "",  # BSE, not available via NSE Kite segment
+}
+
+def _resolve_sym(key: str):
+    """Return (kite_sym, yf_sym, is_mcx) for an app-key like 'NIFTY 50' or 'RELIANCE'."""
+    conf = SYMBOLS.get(key, {})
+    yf = conf.get("yf", f"{key}.NS")
+    nse = conf.get("nse", key)
+    is_mcx = yf.startswith(("CL=", "NG=", "GC=", "SI="))
+    kite_sym = _LIVE_INDEX_MAP.get(key, nse) if not is_mcx else ""
+    return kite_sym, yf, is_mcx
+
+def _pivot_from_df(df: pd.DataFrame, tf: str) -> dict:
+    """Compute standard pivot points from OHLCV dataframe."""
+    try:
+        if tf == "1D":
+            if len(df) < 2:
+                return {}
+            prev = df.iloc[-2]
+            H, L, C = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
+        else:
+            df2 = df.copy()
+            df2["_d"] = pd.to_datetime(df2.index).date
+            today = df2["_d"].iloc[-1]
+            prev_df = df2[df2["_d"] < today]
+            if prev_df.empty:
+                H = float(df["High"].max())
+                L = float(df["Low"].min())
+                C = float(df["Close"].iloc[-1])
+            else:
+                H = float(prev_df["High"].max())
+                L = float(prev_df["Low"].min())
+                C = float(prev_df["Close"].iloc[-1])
+        PP = (H + L + C) / 3
+        return {
+            "PP": round(PP, 2),
+            "R1": round(2*PP - L, 2), "R2": round(PP + H - L, 2),
+            "S1": round(2*PP - H, 2), "S2": round(PP - H + L, 2),
+        }
+    except Exception:
+        return {}
+
+@app.get("/api/live/ltp")
+def live_ltp(key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' or 'RELIANCE'")):
+    """Live last-traded price for chart JS polling. Sub-second Kite data when connected."""
+    kite_sym, yf_sym, is_mcx = _resolve_sym(key)
+
+    if kite_sym and zerodha_api.is_connected():
+        try:
+            raw = zerodha_api.get_quotes([kite_sym])
+            if kite_sym in raw:
+                d = raw[kite_sym]
+                return {"price": round(float(d["last_price"]), 2), "pct": round(float(d.get("pct", 0)), 2)}
+        except Exception:
+            pass
+
+    # yfinance fallback
+    try:
+        import yfinance as yf
+        fi = yf.Ticker(yf_sym).fast_info
+        ltp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
+        if ltp:
+            pct = getattr(fi, "regularMarketChangePercent", 0) or 0
+            return {"price": round(float(ltp), 2), "pct": round(float(pct), 2)}
+    except Exception:
+        pass
+
+    return {"price": 0, "pct": 0}
+
+
+@app.get("/api/live/candles")
+def live_candles(
+    key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' or 'RELIANCE'"),
+    tf:  str = Query("5m", description="Timeframe: 1m 3m 5m 15m 1h 1D"),
+):
+    """
+    OHLCV candles + pivot levels for a symbol. Chart iframe polls this every 30s.
+    Returns IST-aligned UNIX timestamps for intraday, ISO date strings for daily.
+    """
+    kite_sym, yf_sym, is_mcx = _resolve_sym(key)
+    df = pd.DataFrame()
+
+    # Try Kite historical data (uses nse symbol or index token)
+    if not is_mcx and zerodha_api.is_connected():
+        try:
+            nse = SYMBOLS.get(key, {}).get("nse", key)
+            df = zerodha_api.get_historical_data(nse, tf)
+        except Exception:
+            pass
+
+    # Fallback: yfinance
+    if df is None or df.empty:
+        _tf_yf = {"1m":("5d","1m"),"3m":("5d","2m"),"5m":("5d","5m"),"15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}
+        period, interval = _tf_yf.get(tf, ("5d","5m"))
+        try:
+            import yfinance as yf
+            df = yf.Ticker(yf_sym).history(period=period, interval=interval)
+        except Exception:
+            pass
+
+    if df is None or df.empty:
+        return {"candles": [], "pivots": {}}
+
+    candles = []
+    for ts, row in df.iterrows():
+        try:
+            if tf == "1D":
+                t = ts.date().isoformat() if hasattr(ts, "date") else str(ts)[:10]
+            else:
+                _utc = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(pd.Timestamp(ts).timestamp())
+                t = _utc + 19800  # shift UTC → IST for Lightweight Charts display
+            candles.append({
+                "time":  t,
+                "open":  round(float(row["Open"]),  2),
+                "high":  round(float(row["High"]),  2),
+                "low":   round(float(row["Low"]),   2),
+                "close": round(float(row["Close"]), 2),
+            })
+        except Exception:
+            continue
+
+    pivots = _pivot_from_df(df, tf)
+    return {"candles": candles, "pivots": pivots}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
