@@ -136,9 +136,9 @@ _TF_TO_KITE = {
 
 # How many days back to fetch per timeframe
 _TF_DAYS_BACK = {
-    "1m":  1,
-    "3m":  1,
-    "5m":  2,
+    "1m":  5,
+    "3m":  5,
+    "5m":  5,
     "15m": 5,
     "30m": 10,
     "1h":  30,

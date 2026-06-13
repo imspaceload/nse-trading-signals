@@ -402,8 +402,8 @@ def _load_sparklines(symbols_tuple):
 
 @st.cache_data(ttl=20 if _mkt_open_now else 300)
 def _load_spot_and_df(yf_sym, nse_sym, timeframe):
-    period, interval = {"1m":("1d","1m"),"3m":("1d","2m"),"5m":("1d","5m"),
-                        "15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}.get(timeframe, ("1d","5m"))
+    period, interval = {"1m":("5d","1m"),"3m":("5d","2m"),"5m":("5d","5m"),
+                        "15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}.get(timeframe, ("5d","5m"))
     spot, df = None, pd.DataFrame()
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
