@@ -124,7 +124,7 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 60_000 if (is_market_open() and kite_live) else (60_000 if is_market_open() else 300_000)
+_refresh_ms = 600_000 if is_market_open() else 1_800_000
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -1106,20 +1106,47 @@ with _chart_tab:
             _lvl("SL2", _sl2, "#ef4444"),
         ])
 
-        st.markdown(f"""
+        _hdr_sym_js  = active_sym_key.replace("'", "\\'")
+        _hdr_init_p  = f"{spot_price:,.2f}"
+        _hdr_init_pct = f"{arrow} {abs(day_pct):.2f}%"
+        _hdr_init_clr = chg_c
+        _hdr_ohlv = f"O:{df['Open'].iloc[0]:,.0f} &nbsp;H:{df['High'].max():,.0f} &nbsp;L:{df['Low'].min():,.0f}"
+        import streamlit.components.v1 as _hdr_comp
+        _hdr_comp.html(f"""<!DOCTYPE html><html><head><style>
+*{{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif;}}
+body{{background:transparent;}}
+</style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:center;
             padding:6px 6px 4px;border-bottom:1px solid #2a2a4a;">
   <div style="display:flex;align-items:baseline;gap:8px;">
     <span style="color:#e8e8e8;font-size:1.2em;font-weight:700;">{disp_short}</span>
-    <span style="color:#4b5563;font-size:0.65em;">NSE</span>
-    <span style="color:#e8e8e8;font-size:1.35em;font-weight:700;">{spot_price:,.2f}</span>
-    <span style="color:{chg_c};font-size:0.8em;font-weight:600;">{arrow} {abs(day_pct):.2f}%</span>
+    <span style="color:#4b5563;font-size:0.65em;">{_nse_label}</span>
+    <span id="ltp" style="color:#e8e8e8;font-size:1.35em;font-weight:700;">{_hdr_init_p}</span>
+    <span id="pct" style="color:{_hdr_init_clr};font-size:0.8em;font-weight:600;">{_hdr_init_pct}</span>
   </div>
-  <div style="color:#4b5563;font-size:0.58em;">
-    O:{df['Open'].iloc[0]:,.0f} &nbsp;H:{df['High'].max():,.0f} &nbsp;L:{df['Low'].min():,.0f}
-  </div>
+  <div style="color:#4b5563;font-size:0.58em;">{_hdr_ohlv}</div>
 </div>
-<div style="background:{_sig_bg};border:1px solid {_sig_border};border-left:3px solid {_sig_accent};
+<script>
+const SYM = '{_hdr_sym_js}';
+function fmt(n){{return n>=1000?n.toLocaleString('en-IN',{{minimumFractionDigits:2,maximumFractionDigits:2}}):n.toFixed(2);}}
+async function poll(){{
+  try{{
+    const r = await fetch('/api/live/ltp?key='+encodeURIComponent(SYM));
+    if(!r.ok) return;
+    const d = await r.json();
+    if(d.price>0){{
+      document.getElementById('ltp').textContent = fmt(d.price);
+      const clr = d.pct>=0?'#4caf50':'#ef4444';
+      const el = document.getElementById('pct');
+      el.style.color = clr;
+      el.textContent = (d.pct>=0?'▲':'▼')+' '+Math.abs(d.pct).toFixed(2)+'%';
+    }}
+  }}catch(e){{}}
+}}
+poll();
+setInterval(poll,2000);
+</script></body></html>""", height=48)
+        st.markdown(f"""<div style="background:{_sig_bg};border:1px solid {_sig_border};border-left:3px solid {_sig_accent};
             border-radius:6px;padding:8px 10px 8px;margin:5px 0 3px;">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
     <div>
@@ -2030,7 +2057,7 @@ with tab_sms:
 st.markdown(
     f'<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
     f'For educational purposes only. Not financial advice. '
-    f'Auto-refreshes every {"60s" if (mkt_open and kite_live) else "60s" if mkt_open else "5min"}. Prices update every 2s via live polling.'
+    f'Prices update live every 2s. Indicators refresh every 10min. Not financial advice.'
     f'</div>',
     unsafe_allow_html=True,
 )
