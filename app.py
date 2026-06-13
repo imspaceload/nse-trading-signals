@@ -311,7 +311,7 @@ _mkt_open_now = is_market_open()
 def _load_indices():
     return get_nse_indices()
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=3600)
 def _load_news():
     return scrape_moneycontrol_news()
 
@@ -634,7 +634,15 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
             if nse:
                 nse_syms.append(nse)
                 nse_map[nse] = k
-    if not nse_syms and not bse_syms:
+    # Collect MCX commodities for a single batch call
+    mcx_pairs = []  # [(app_key, commodity), ...]
+    for k in symbols_tuple:
+        if k not in _BSE_WATCHLIST_SYMS:
+            mcx_commodity = SYMBOLS.get(k, {}).get("mcx", "")
+            if mcx_commodity:
+                mcx_pairs.append((k, mcx_commodity))
+
+    if not nse_syms and not bse_syms and not mcx_pairs:
         return {}
     result = {}
     try:
@@ -650,16 +658,28 @@ def _load_kite_quotes(symbols_tuple: tuple) -> dict:
                 result[k] = {"ltp": data["last_price"], "pct": data["pct"], "change": data["change"]}
     except Exception:
         return result
-    # MCX commodities via active futures contract
-    for k in symbols_tuple:
-        mcx_commodity = SYMBOLS.get(k, {}).get("mcx", "")
-        if mcx_commodity:
-            try:
-                d = zerodha_api.get_mcx_ltp(mcx_commodity)
-                if d:
-                    result[k] = {"ltp": d["price"], "pct": d["pct"], "change": d["change"]}
-            except Exception:
-                pass
+    # MCX commodities — single batch kite.quote() call instead of one call per commodity
+    if mcx_pairs:
+        try:
+            _kite = zerodha_api.get_kite()
+            if _kite:
+                mcx_key_map = {}  # "MCX:SYM" → app_key
+                for k, commodity in mcx_pairs:
+                    sym = zerodha_api.get_mcx_active_symbol(commodity)
+                    if sym:
+                        mcx_key_map[f"MCX:{sym}"] = k
+                if mcx_key_map:
+                    raw_mcx = _kite.quote(list(mcx_key_map.keys()))
+                    for mkey, k in mcx_key_map.items():
+                        if mkey in raw_mcx:
+                            d = raw_mcx[mkey]
+                            ltp = float(d["last_price"])
+                            prev = float((d.get("ohlc") or {}).get("close", ltp) or ltp)
+                            chg = round(ltp - prev, 2)
+                            pct = round(chg / prev * 100, 2) if prev else 0
+                            result[k] = {"ltp": round(ltp, 2), "pct": pct, "change": chg}
+        except Exception:
+            pass
     return result
 
 @st.cache_data(ttl=30 if _mkt_open_now else 300)
@@ -1005,19 +1025,24 @@ with _chart_tab:
             if EMAIL_SENDER and EMAIL_RECEIVER:
                 send_signal_email(EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER, active_sym_key, signal, option_rec)
 
-    # Auto-close trades on SL/Target
-    for t in get_open_trades():
-        t_sym = SYMBOLS.get(t["instrument"], {})
-        t_nse = t_sym.get("nse","")
-        if not t_nse: continue
-        cur_ltp = get_current_option_ltp(t_nse, t["strike"], t["option_type"], t["expiry"])
-        if cur_ltp is None: continue
-        if t["stop_loss"] > 0 and cur_ltp <= t["stop_loss"]:
-            closed = close_trade(t["id"], cur_ltp)
-            if closed: send_sms_to_all(closed, action="EXIT")
-        elif t["target_price"] > 0 and cur_ltp >= t["target_price"]:
-            closed = close_trade(t["id"], cur_ltp)
-            if closed: send_sms_to_all(closed, action="EXIT")
+    # Auto-close trades on SL/Target — throttled to once per 60s to avoid NSE chain API on every rerun
+    _ac_now = datetime.now(IST)
+    _ac_last = st.session_state.get("_autoclose_last_ts")
+    _ac_due = is_market_open() and (not _ac_last or (_ac_now - _ac_last).total_seconds() >= 60)
+    if _ac_due:
+        st.session_state["_autoclose_last_ts"] = _ac_now
+        for t in get_open_trades():
+            t_sym = SYMBOLS.get(t["instrument"], {})
+            t_nse = t_sym.get("nse","")
+            if not t_nse: continue
+            cur_ltp = get_current_option_ltp(t_nse, t["strike"], t["option_type"], t["expiry"])
+            if cur_ltp is None: continue
+            if t["stop_loss"] > 0 and cur_ltp <= t["stop_loss"]:
+                closed = close_trade(t["id"], cur_ltp)
+                if closed: send_sms_to_all(closed, action="EXIT")
+            elif t["target_price"] > 0 and cur_ltp >= t["target_price"]:
+                closed = close_trade(t["id"], cur_ltp)
+                if closed: send_sms_to_all(closed, action="EXIT")
 
     # ── Symbol header + Signal box (always visible) ──
     pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
