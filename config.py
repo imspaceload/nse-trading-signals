@@ -11,7 +11,10 @@ SYMBOLS = {
     # ── Indices ──
     "NIFTY 50":         {"yf": "^NSEI",           "nse": "NIFTY",       "tv": "NSE:NIFTY50"},
     "BANK NIFTY":       {"yf": "^NSEBANK",        "nse": "BANKNIFTY",   "tv": "NSE:BANKNIFTY"},
+    "FIN NIFTY":        {"yf": "^CNXFIN",         "nse": "FINNIFTY",    "tv": "NSE:FINNIFTY"},
+    "MIDCAP SELECT":    {"yf": "^NSEMDCP50",      "nse": "MIDCPNIFTY",  "tv": "NSE:MIDCPNIFTY"},
     "SENSEX":           {"yf": "^BSESN",          "nse": "",            "tv": "BSE:SENSEX"},
+    "INDIA VIX":        {"yf": "^INDIAVIX",       "nse": "",            "tv": "NSE:INDIAVIX"},
     # ── Commodities ──
     "MCX CRUDE OIL":    {"yf": "CL=F",            "nse": "",            "tv": "MCX:CRUDEOIL1!"},
     "MCX NATURAL GAS":  {"yf": "NG=F",            "nse": "",            "tv": "MCX:NATURALGAS1!"},
