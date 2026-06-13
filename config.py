@@ -266,6 +266,36 @@ SYMBOLS = {
     "JUSTDIAL":         {"yf": "JUSTDIAL.NS",     "nse": "JUSTDIAL",    "tv": "NSE:JUSTDIAL"},
     "HFCL":             {"yf": "HFCL.NS",         "nse": "HFCL",        "tv": "NSE:HFCL"},
     "NAZARA":           {"yf": "NAZARA.NS",       "nse": "NAZARA",      "tv": "NSE:NAZARA"},
+    # ── Finance / Capital Markets ──
+    "JIOFIN":           {"yf": "JIOFIN.NS",       "nse": "JIOFIN",      "tv": "NSE:JIOFIN"},
+    "BAJAJHFL":         {"yf": "BAJAJHFL.NS",     "nse": "BAJAJHFL",    "tv": "NSE:BAJAJHFL"},
+    "ANGELONE":         {"yf": "ANGELONE.NS",     "nse": "ANGELONE",    "tv": "NSE:ANGELONE"},
+    "CAMS":             {"yf": "CAMS.NS",         "nse": "CAMS",        "tv": "NSE:CAMS"},
+    "CDSL":             {"yf": "CDSL.NS",         "nse": "CDSL",        "tv": "NSE:CDSL"},
+    # ── Pharma (additional) ──
+    "ZYDUSLIFE":        {"yf": "ZYDUSLIFE.NS",    "nse": "ZYDUSLIFE",   "tv": "NSE:ZYDUSLIFE"},
+    "MANKIND":          {"yf": "MANKIND.NS",      "nse": "MANKIND",     "tv": "NSE:MANKIND"},
+    "PIRAMALPHARM":     {"yf": "PIRAMALPHARM.NS", "nse": "PIRAMALPHARM","tv": "NSE:PIRAMALPHARM"},
+    "NATCOPHARM":       {"yf": "NATCOPHARM.NS",   "nse": "NATCOPHARM",  "tv": "NSE:NATCOPHARM"},
+    "SYNGENE":          {"yf": "SYNGENE.NS",      "nse": "SYNGENE",     "tv": "NSE:SYNGENE"},
+    "SANOFI":           {"yf": "SANOFI.NS",       "nse": "SANOFI",      "tv": "NSE:SANOFI"},
+    "PFIZER":           {"yf": "PFIZER.NS",       "nse": "PFIZER",      "tv": "NSE:PFIZER"},
+    # ── Electronics / Capital Goods (additional) ──
+    "DIXON":            {"yf": "DIXON.NS",        "nse": "DIXON",       "tv": "NSE:DIXON"},
+    "AMBER":            {"yf": "AMBER.NS",        "nse": "AMBER",       "tv": "NSE:AMBER"},
+    "BAJAJELEC":        {"yf": "BAJAJELEC.NS",    "nse": "BAJAJELEC",   "tv": "NSE:BAJAJELEC"},
+    "BLUESTARCO":       {"yf": "BLUESTARCO.NS",   "nse": "BLUESTARCO",  "tv": "NSE:BLUESTARCO"},
+    # ── IT / Tech (additional) ──
+    "TATATECH":         {"yf": "TATATECH.NS",     "nse": "TATATECH",    "tv": "NSE:TATATECH"},
+    "PIIND":            {"yf": "PIIND.NS",        "nse": "PIIND",       "tv": "NSE:PIIND"},
+    # ── Energy (additional) ──
+    "JSWENERGY":        {"yf": "JSWENERGY.NS",    "nse": "JSWENERGY",   "tv": "NSE:JSWENERGY"},
+    # ── Chemicals (additional) ──
+    "FINEORG":          {"yf": "FINEORG.NS",      "nse": "FINEORG",     "tv": "NSE:FINEORG"},
+    "VINDHYATEL":       {"yf": "VINDHYATEL.NS",   "nse": "VINDHYATEL",  "tv": "NSE:VINDHYATEL"},
+    # ── FMCG / Consumer (additional) ──
+    "PATANJALI":        {"yf": "PATANJALI.NS",    "nse": "PATANJALI",   "tv": "NSE:PATANJALI"},
+    "DELHIVERY":        {"yf": "DELHIVERY.NS",    "nse": "DELHIVERY",   "tv": "NSE:DELHIVERY"},
 }
 
 MARKET_OPEN_HOUR = 9
