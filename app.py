@@ -124,7 +124,7 @@ if _qp.get("wl_delete"):
 kite_configured = bool(os.environ.get("KITE_API_KEY","").strip() and os.environ.get("KITE_API_SECRET","").strip())
 kite_live = zerodha_api.is_connected() if kite_configured else False
 
-_refresh_ms = 30_000 if (is_market_open() and kite_live) else (30_000 if is_market_open() else 300_000)
+_refresh_ms = 60_000 if (is_market_open() and kite_live) else (60_000 if is_market_open() else 300_000)
 st_autorefresh(interval=_refresh_ms, limit=0, key="live_refresh")
 
 st.markdown("""
@@ -749,45 +749,95 @@ with left_col:
                 '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
                 '</div>', unsafe_allow_html=True)
 
+    import json as _wl_json
     import html as _html
-    rows_html = '<div style="overflow:hidden;">'
-    for wl_name in saved_watchlist:
-        fn   = _html.escape(SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name)
-        p    = wl_prices.get(wl_name)
-        pct  = wl_changes.get(wl_name)
-        ps   = f"{p:,.2f}" if p else "--"
-        act  = wl_name == active_sym_key
+    # Build symbol metadata for JS
+    _wl_syms_js = []
+    for _wn in saved_watchlist:
+        _yf = SYMBOLS.get(_wn, {}).get("yf", "")
+        _exch = "MCX" if _yf.startswith(("CL=","NG=","GC=","SI=")) else ("BSE" if _yf.startswith("^BSE") else "NSE")
+        _wl_syms_js.append({
+            "key":  _wn,
+            "name": SYMBOL_SHORT.get(_wn, ("", _wn))[1] or _wn,
+            "exch": _exch,
+        })
+    _wl_syms_json  = _wl_json.dumps(_wl_syms_js)
+    _wl_init_json  = _wl_json.dumps({k: {"price": v["ltp"], "pct": v["pct"], "change": v.get("change", 0)}
+                                      for k, v in kite_quotes.items() if v.get("ltp")})
+    _wl_active_js  = active_sym_key.replace("'", "\\'")
+    _wl_row_h      = max(len(saved_watchlist) * 46 + 4, 100)
 
-        if pct is not None:
-            clr  = "#4caf50" if pct >= 0 else "#ef4444"
-            arr  = "▲" if pct >= 0 else "▼"
-            acv  = abs(round(p * pct / 100, 2)) if p else 0
-            sgn  = "+" if pct >= 0 else "-"
-            sub  = f'<span style="color:{clr};font-size:0.6em;">{sgn}{acv:,.2f} ({abs(pct):.2f}%)</span>'
-        else:
-            clr, arr, sub = "#9ca3af", "", ""
+    import streamlit.components.v1 as _wl_comp
+    _wl_comp.html(f"""<!DOCTYPE html><html><head>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif;}}
+body{{background:#0e0e1a;overflow-x:hidden;}}
+.row{{display:flex;border-bottom:1px solid rgba(42,42,74,0.35);cursor:pointer;border-left:3px solid transparent;}}
+.row:hover{{background:rgba(56,126,209,0.04);}}
+.row.active{{border-left-color:#387ed1;background:rgba(56,126,209,0.07);}}
+.main{{flex:1;display:flex;justify-content:space-between;align-items:center;padding:10px 8px 10px 11px;}}
+.nm{{color:#e8e8e8;font-size:0.82em;font-weight:600;display:block;}}
+.row.active .nm{{color:#60a5fa;}}
+.ex{{color:#4b5563;font-size:0.57em;}}
+.pr{{text-align:right;}}
+.ltp{{font-size:0.82em;font-weight:700;}}
+.sub{{font-size:0.6em;}}
+.del{{color:#2d3748;font-size:0.8em;padding:0 8px;display:flex;align-items:center;}}
+.del:hover{{color:#ef4444;}}
+</style></head><body>
+<div id="wl"></div>
+<script>
+const WL     = {_wl_syms_json};
+const ACTIVE = '{_wl_active_js}';
+let prices   = {_wl_init_json};
 
-        bdr  = "border-left:3px solid #387ed1;" if act else "border-left:3px solid transparent;"
-        bg   = "background:rgba(56,126,209,0.07);" if act else ""
-        nc   = "#60a5fa" if act else "#e8e8e8"
-        sel  = "?wl_select=" + urllib.parse.quote_plus(wl_name)
-        _yf  = SYMBOLS.get(wl_name, {}).get("yf", "")
-        exch = "MCX" if _yf.startswith(("CL=","NG=","GC=","SI=")) else ("BSE" if _yf.startswith("^BSE") else "NSE")
-        dl   = "?wl_delete=" + urllib.parse.quote_plus(wl_name)
+function fmtN(n){{
+  if(n>=100000) return (n/100000).toFixed(2)+'L';
+  if(n>=1000)   return n.toLocaleString('en-IN',{{minimumFractionDigits:2,maximumFractionDigits:2}});
+  return n.toFixed(2);
+}}
+function nav(url){{ window.parent.location.href = url; }}
 
-        # Single-line compact HTML — no blank lines so Markdown parser won't escape closing tags
-        rows_html += (
-            f'<div style="{bdr}{bg}display:flex;border-bottom:1px solid rgba(42,42,74,0.35);">'
-            f'<a href="{sel}" style="flex:1;text-decoration:none;display:flex;justify-content:space-between;align-items:center;padding:10px 8px 10px 14px;">'
-            f'<div><span style="display:block;color:{nc};font-size:0.82em;font-weight:600;">{fn}</span>'
-            f'<span style="color:#4b5563;font-size:0.57em;">{exch}</span></div>'
-            f'<div style="text-align:right;"><span style="color:{clr};font-size:0.82em;font-weight:700;">{ps} {arr}</span><br>{sub}</div>'
-            f'</a>'
-            f'<a href="{dl}" style="color:#2d3748;font-size:0.75em;padding:0 8px;text-decoration:none;display:flex;align-items:center;">&#x2715;</a>'
-            f'</div>'
-        )
-    rows_html += '</div>'
-    st.markdown(rows_html, unsafe_allow_html=True)
+function render(){{
+  const wl = document.getElementById('wl');
+  wl.innerHTML = '';
+  WL.forEach(s=>{{
+    const isAct = s.key === ACTIVE;
+    const d = prices[s.key];
+    let ltpHtml='<span class="ltp" style="color:#9ca3af">--</span>', subHtml='';
+    if(d && d.price>0){{
+      const clr = d.pct>=0?'#4caf50':'#ef4444';
+      const arr = d.pct>=0?'▲':'▼';
+      const acv = Math.abs(d.change||0);
+      const sgn = d.pct>=0?'+':'-';
+      ltpHtml = `<span class="ltp" style="color:${{clr}}">${{fmtN(d.price)}} ${{arr}}</span>`;
+      subHtml = `<span class="sub" style="color:${{clr}}">${{sgn}}${{fmtN(acv)}} (${{Math.abs(d.pct).toFixed(2)}}%)</span>`;
+    }}
+    const enc = encodeURIComponent(s.key);
+    const row = document.createElement('div');
+    row.className='row'+(isAct?' active':'');
+    row.innerHTML=`
+      <div class="main" onclick="nav('?wl_select=${{enc}}')">
+        <div><span class="nm">${{s.name}}</span><span class="ex">${{s.exch}}</span></div>
+        <div class="pr">${{ltpHtml}}<br>${{subHtml}}</div>
+      </div>
+      <span class="del" onclick="nav('?wl_delete=${{enc}}')">&#x2715;</span>`;
+    wl.appendChild(row);
+  }});
+}}
+
+render();
+
+async function poll(){{
+  const keys = WL.map(s=>s.key).join(',');
+  try{{
+    const r = await fetch('/api/live/watchlist?keys='+encodeURIComponent(keys));
+    if(r.ok){{ prices = await r.json(); render(); }}
+  }}catch(e){{}}
+}}
+poll();
+setInterval(poll, 2000);
+</script></body></html>""", height=_wl_row_h, scrolling=False)
 
     # Manual add / remove
     wl_input = st.text_input("Add", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
@@ -1980,7 +2030,7 @@ with tab_sms:
 st.markdown(
     f'<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
     f'For educational purposes only. Not financial advice. '
-    f'Auto-refreshes every {"30s" if (mkt_open and kite_live) else "30s" if mkt_open else "5min"}.'
+    f'Auto-refreshes every {"60s" if (mkt_open and kite_live) else "60s" if mkt_open else "5min"}. Prices update every 2s via live polling.'
     f'</div>',
     unsafe_allow_html=True,
 )

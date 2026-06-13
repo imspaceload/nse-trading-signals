@@ -447,6 +447,37 @@ def _pivot_from_df(df: pd.DataFrame, tf: str) -> dict:
     except Exception:
         return {}
 
+@app.get("/api/live/watchlist")
+def live_watchlist(keys: str = Query(..., description="Comma-separated app symbol keys")):
+    """Batch LTP+pct for all watchlist symbols in one Kite quotes call."""
+    key_list = [k.strip() for k in keys.split(",") if k.strip()]
+    result = {}
+    if not key_list or not zerodha_api.is_connected():
+        return result
+    sym_map: dict = {}  # kite_sym → app_key
+    kite_syms: list = []
+    for k in key_list:
+        kite_sym, _, is_mcx = _resolve_sym(k)
+        if kite_sym and not is_mcx:
+            sym_map[kite_sym] = k
+            kite_syms.append(kite_sym)
+    if not kite_syms:
+        return result
+    try:
+        raw = zerodha_api.get_quotes(kite_syms)
+        for ksym, data in raw.items():
+            app_key = sym_map.get(ksym)
+            if app_key:
+                result[app_key] = {
+                    "price":  round(float(data["last_price"]), 2),
+                    "pct":    round(float(data.get("pct", 0)), 2),
+                    "change": round(float(data.get("change", 0)), 2),
+                }
+    except Exception:
+        pass
+    return result
+
+
 @app.get("/api/live/ltp")
 def live_ltp(key: str = Query(..., description="App symbol key e.g. 'NIFTY 50' or 'RELIANCE'")):
     """Live last-traded price for chart JS polling. Sub-second Kite data when connected."""
