@@ -1073,11 +1073,9 @@ with _chart_tab:
         if _pval and _pval > 0:
             _pl_js.append(f"cs.createPriceLine({{price:{_pval},color:'{_pclr}',lineWidth:1,lineStyle:{_pls},axisLabelVisible:true,title:'{_plbl}'}});")
 
-    # Chart HTML is STATIC (only symbol + TF embedded).
-    # All data (candles, LTP, pivots) is fetched by chart JS via /api/live/* endpoints.
-    # This means the iframe is NOT recreated on every Streamlit refresh — no more flash.
     _sym_js  = active_sym_key.replace("'", "\\'")
     _tf_js   = st.session_state.chart_tf
+    _fb_ltp  = spot_price or 0
     _chart_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>*{{margin:0;padding:0;box-sizing:border-box;}}html,body{{background:#131722;overflow:hidden;width:100%;height:490px;}}</style>
@@ -1086,6 +1084,11 @@ with _chart_tab:
 <script>
 const SYMBOL = '{_sym_js}';
 const TF     = '{_tf_js}';
+
+// Embedded fallback — chart shows immediately even before API is available
+const INIT_CANDLES = {_lc_json};
+const INIT_LTP     = {_fb_ltp};
+const INIT_PIVOTS  = {_json.dumps({{k:v for k,v in pivots.items() if v and v > 0}})};
 
 const chart = LightweightCharts.createChart(document.getElementById('c'), {{
   width: window.innerWidth, height: 490,
@@ -1101,57 +1104,51 @@ const cs = chart.addCandlestickSeries({{
   wickUpColor:'#4caf50', wickDownColor:'#ef4444',
 }});
 
-let ltpLine  = null;
+let ltpLine = null;
 let pivotLines = {{}};
-let candlesLoaded = false;
-
 const PIVOT_COLORS = {{R2:'#ef4444',R1:'#f97316',PP:'#fbbf24',S1:'#22c55e',S2:'#16a34a'}};
 const PIVOT_STYLES = {{R2:2,R1:2,PP:1,S1:2,S2:2}};
 
-async function loadCandles() {{
+function drawPivots(pvt) {{
+  Object.values(pivotLines).forEach(pl => cs.removePriceLine(pl));
+  pivotLines = {{}};
+  Object.entries(pvt).forEach(([k, v]) => {{
+    if (v && v > 0)
+      pivotLines[k] = cs.createPriceLine({{price:v,color:PIVOT_COLORS[k]||'#9ca3af',lineWidth:1,lineStyle:PIVOT_STYLES[k]||2,axisLabelVisible:true,title:k}});
+  }});
+}}
+
+// ── Show embedded data immediately ──
+if (INIT_CANDLES.length > 0) {{ cs.setData(INIT_CANDLES); chart.timeScale().fitContent(); }}
+if (INIT_LTP > 0) ltpLine = cs.createPriceLine({{price:INIT_LTP,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
+drawPivots(INIT_PIVOTS);
+
+// ── Live upgrades via /api/live/* (requires nginx /api/ route on server) ──
+async function apiLoadCandles() {{
   try {{
-    const r = await fetch('/api/live/candles?key=' + encodeURIComponent(SYMBOL) + '&tf=' + TF, {{cache:'no-store'}});
+    const r = await fetch('/api/live/candles?key='+encodeURIComponent(SYMBOL)+'&tf='+TF, {{cache:'no-store'}});
     if (!r.ok) return;
     const d = await r.json();
-    if (d.candles && d.candles.length > 0) {{
-      cs.setData(d.candles);
-      if (!candlesLoaded) {{ chart.timeScale().fitContent(); candlesLoaded = true; }}
-    }}
-    // Draw / update pivot lines
-    Object.keys(pivotLines).forEach(k => cs.removePriceLine(pivotLines[k]));
-    pivotLines = {{}};
-    if (d.pivots) {{
-      Object.entries(d.pivots).forEach(([k, v]) => {{
-        if (v && v > 0) {{
-          pivotLines[k] = cs.createPriceLine({{
-            price: v, color: PIVOT_COLORS[k]||'#9ca3af',
-            lineWidth: 1, lineStyle: PIVOT_STYLES[k]||2,
-            axisLabelVisible: true, title: k,
-          }});
-        }}
-      }});
-    }}
+    if (d.candles && d.candles.length > 0) {{ cs.setData(d.candles); chart.timeScale().fitContent(); }}
+    if (d.pivots) drawPivots(d.pivots);
   }} catch(e) {{}}
 }}
 
-async function updateLTP() {{
+async function apiUpdateLTP() {{
   try {{
-    const r = await fetch('/api/live/ltp?key=' + encodeURIComponent(SYMBOL), {{cache:'no-store'}});
+    const r = await fetch('/api/live/ltp?key='+encodeURIComponent(SYMBOL), {{cache:'no-store'}});
     if (!r.ok) return;
     const d = await r.json();
     if (d.price && d.price > 0) {{
-      if (!ltpLine) {{
-        ltpLine = cs.createPriceLine({{price:d.price,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
-      }} else {{
-        ltpLine.applyOptions({{price:d.price}});
-      }}
+      if (!ltpLine) ltpLine = cs.createPriceLine({{price:d.price,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
+      else ltpLine.applyOptions({{price:d.price}});
     }}
   }} catch(e) {{}}
 }}
 
-loadCandles();
-setInterval(updateLTP,    1000);   // LTP price line updates every 1 second
-setInterval(loadCandles, 30000);   // Candles + pivots refresh every 30 seconds
+apiLoadCandles();                         // try API on load (no-op if nginx not set up)
+setInterval(apiUpdateLTP,   1000);        // LTP every 1s via API if available
+setInterval(apiLoadCandles, 30000);       // Candles every 30s via API if available
 window.addEventListener('resize', () => chart.resize(window.innerWidth, 490));
 </script></body></html>"""
 
