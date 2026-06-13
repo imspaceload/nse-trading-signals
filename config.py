@@ -266,7 +266,39 @@ SYMBOLS = {
     "JUSTDIAL":         {"yf": "JUSTDIAL.NS",     "nse": "JUSTDIAL",    "tv": "NSE:JUSTDIAL"},
     "HFCL":             {"yf": "HFCL.NS",         "nse": "HFCL",        "tv": "NSE:HFCL"},
     "NAZARA":           {"yf": "NAZARA.NS",       "nse": "NAZARA",      "tv": "NSE:NAZARA"},
-    # ── Finance / Capital Markets ──
+    # ── Insurance / Large PSU ──
+    "LICI":             {"yf": "LICI.NS",         "nse": "LICI",        "tv": "NSE:LICI"},
+    "STARHEALTH":       {"yf": "STARHEALTH.NS",   "nse": "STARHEALTH",  "tv": "NSE:STARHEALTH"},
+    "MAXHEALTH":        {"yf": "MAXHEALTH.NS",    "nse": "MAXHEALTH",   "tv": "NSE:MAXHEALTH"},
+    "MAXFIN":           {"yf": "MFSL.NS",         "nse": "MFSL",        "tv": "NSE:MFSL"},
+    "ASTER":            {"yf": "ASTERDM.NS",      "nse": "ASTERDM",     "tv": "NSE:ASTERDM"},
+    "MEDANTA":          {"yf": "MEDANTA.NS",      "nse": "MEDANTA",     "tv": "NSE:MEDANTA"},
+    "RAINBOW":          {"yf": "RAINBOW.NS",      "nse": "RAINBOW",     "tv": "NSE:RAINBOW"},
+    # ── Exchanges / Capital Markets ──
+    "BSE":              {"yf": "BSE.NS",          "nse": "BSE",         "tv": "NSE:BSE"},
+    "MCXINDIA":         {"yf": "MCX.NS",          "nse": "MCX",         "tv": "NSE:MCX"},
+    "360ONE":           {"yf": "360ONE.NS",       "nse": "360ONE",      "tv": "NSE:360ONE"},
+    "NUVAMA":           {"yf": "NUVAMA.NS",       "nse": "NUVAMA",      "tv": "NSE:NUVAMA"},
+    "CRISIL":           {"yf": "CRISIL.NS",       "nse": "CRISIL",      "tv": "NSE:CRISIL"},
+    # ── Agrochemicals / Fertilizers ──
+    "UPL":              {"yf": "UPL.NS",          "nse": "UPL",         "tv": "NSE:UPL"},
+    "COROMANDEL":       {"yf": "COROMANDEL.NS",   "nse": "COROMANDEL",  "tv": "NSE:COROMANDEL"},
+    "DEEPAKFERT":       {"yf": "DEEPAKFERT.NS",   "nse": "DEEPAKFERT",  "tv": "NSE:DEEPAKFERT"},
+    "CHAMBLFERT":       {"yf": "CHAMBLFERT.NS",   "nse": "CHAMBLFERT",  "tv": "NSE:CHAMBLFERT"},
+    # ── Infrastructure / EPC ──
+    "KPIL":             {"yf": "KPIL.NS",         "nse": "KPIL",        "tv": "NSE:KPIL"},
+    "GODREJIND":        {"yf": "GODREJIND.NS",    "nse": "GODREJIND",   "tv": "NSE:GODREJIND"},
+    # ── IT / SaaS (additional) ──
+    "HAPPSTMNDS":       {"yf": "HAPPSTMNDS.NS",   "nse": "HAPPSTMNDS",  "tv": "NSE:HAPPSTMNDS"},
+    "TANLA":            {"yf": "TANLA.NS",        "nse": "TANLA",       "tv": "NSE:TANLA"},
+    "LATENTVIEW":       {"yf": "LATENTVIEW.NS",   "nse": "LATENTVIEW",  "tv": "NSE:LATENTVIEW"},
+    "NEWGEN":           {"yf": "NEWGEN.NS",       "nse": "NEWGEN",      "tv": "NSE:NEWGEN"},
+    # ── Pharma / Diagnostics (additional) ──
+    "JBCHEPHARM":       {"yf": "JBCHEPHARM.NS",   "nse": "JBCHEPHARM",  "tv": "NSE:JBCHEPHARM"},
+    "VIJAYA":           {"yf": "VIJAYA.NS",       "nse": "VIJAYA",      "tv": "NSE:VIJAYA"},
+    # ── FMCG (additional) ──
+    "JYOTHYLAB":        {"yf": "JYOTHYLAB.NS",    "nse": "JYOTHYLAB",   "tv": "NSE:JYOTHYLAB"},
+}
     "JIOFIN":           {"yf": "JIOFIN.NS",       "nse": "JIOFIN",      "tv": "NSE:JIOFIN"},
     "BAJAJHFL":         {"yf": "BAJAJHFL.NS",     "nse": "BAJAJHFL",    "tv": "NSE:BAJAJHFL"},
     "ANGELONE":         {"yf": "ANGELONE.NS",     "nse": "ANGELONE",    "tv": "NSE:ANGELONE"},
