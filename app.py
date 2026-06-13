@@ -718,6 +718,35 @@ if not saved_watchlist:
 
 # All symbols to quote: watchlist + active (in case active isn't in watchlist)
 _quote_set = tuple(sorted(set(saved_watchlist) | {active_sym_key}))
+
+# ── Parallel prefetch: start chart + news in background threads ──
+# This lets _load_kite_quotes, _load_chart_and_indicators, and _load_news
+# all execute concurrently instead of sequentially (saves 3-6s on cold cache).
+import threading as _th
+_pf_nse = active_sym.get("nse", "")
+_pf_yf  = active_sym.get("yf", "")
+_pf_tf  = st.session_state.get("chart_tf", "5m")
+_pf_chart_res: list = [None]
+_pf_news_res:  list = [None]
+
+def _bg_chart():
+    try:
+        _pf_chart_res[0] = _load_chart_and_indicators(active_sym_key, _pf_nse, _pf_yf, _pf_tf)
+    except Exception:
+        pass
+
+def _bg_news():
+    try:
+        _pf_news_res[0] = _load_news()
+    except Exception:
+        pass
+
+_t_chart = _th.Thread(target=_bg_chart, daemon=True)
+_t_news  = _th.Thread(target=_bg_news,  daemon=True)
+_t_chart.start()
+_t_news.start()
+
+# Main thread fetches kite quotes while background threads run
 kite_quotes = _load_kite_quotes(_quote_set) if kite_live else {}
 
 if kite_live:
@@ -978,11 +1007,15 @@ def _get_option_rec_cached(nse_sym: str, atm_strike: int, action: str):
 #  CHART TAB
 # ══════════════════════════════════════════════
 with _chart_tab:
-    # Single cached call — returns instantly on warm cache
     _chart_nse = active_sym.get("nse","")
     _chart_yf  = active_sym.get("yf","")
-    _spot_cached, df, rsi_d, macd_d, st_d, vwap_d, signal, all_signals, pivots = \
-        _load_chart_and_indicators(active_sym_key, _chart_nse, _chart_yf, st.session_state.chart_tf)
+    # Wait for background prefetch (was running while kite_quotes loaded)
+    _t_chart.join(timeout=18)
+    if _pf_chart_res[0] is not None and _pf_tf == st.session_state.chart_tf:
+        _spot_cached, df, rsi_d, macd_d, st_d, vwap_d, signal, all_signals, pivots = _pf_chart_res[0]
+    else:
+        _spot_cached, df, rsi_d, macd_d, st_d, vwap_d, signal, all_signals, pivots = \
+            _load_chart_and_indicators(active_sym_key, _chart_nse, _chart_yf, st.session_state.chart_tf)
 
     # Always use the freshest Kite LTP when connected (kite_quotes already fetched above)
     spot_price = (kite_quotes.get(active_sym_key, {}).get("ltp") or _spot_cached) if kite_live else _spot_cached
@@ -1799,7 +1832,9 @@ with _picks_tab:
 # ══════════════════════════════════════════════
 #  BOTTOM TABS: AI News + SMS Admin
 # ══════════════════════════════════════════════
-news_data = _load_news()
+# Collect prefetched news (was loading in background since the top of the script)
+_t_news.join(timeout=8)
+news_data = _pf_news_res[0] if _pf_news_res[0] is not None else []
 tab_news, tab_sms = st.tabs([f"AI News  {len(news_data)}", "SMS Admin"])
 
 
