@@ -397,7 +397,7 @@ def get_quotes(symbols: List[str], exchange: str = "NSE") -> dict:
 def get_historical_data_bulk(
     symbols: list,
     timeframe: str = "15m",
-    max_workers: int = 5,
+    max_workers: int = 10,
 ) -> Dict[str, pd.DataFrame]:
     """
     Fetch OHLCV candles from Kite for multiple symbols in parallel.
@@ -421,10 +421,18 @@ def get_historical_data_bulk(
 
     _lock = threading.Lock()
     _last_call = [0.0]
-    _MIN_INTERVAL = 0.35  # stay under Kite's 3 req/sec limit
+    _MIN_INTERVAL = 0.15  # ~6 req/sec — safe Kite historical API throughput
+
+    _BULK_IDX_TOKENS = {
+        "NIFTY 50": 256265, "NIFTY": 256265,
+        "BANK NIFTY": 260105, "BANKNIFTY": 260105,
+        "FIN NIFTY": 257801, "FINNIFTY": 257801,
+        "MIDCAP SELECT": 288009, "MIDCPNIFTY": 288009,
+        "INDIA VIX": 264969,
+    }
 
     def _fetch_one(sym: str) -> tuple:
-        token = get_instrument_token(sym, "NSE")
+        token = _BULK_IDX_TOKENS.get(sym) or get_instrument_token(sym, "NSE")
         if not token:
             return sym, pd.DataFrame()
         with _lock:
@@ -475,14 +483,15 @@ def get_historical_data(
     if not kite:
         return pd.DataFrame()
 
-    token = get_instrument_token(symbol, exchange)
-    if not token:
-        # Try index token mapping
-        idx_map = {
-            "NIFTY 50": 256265, "BANK NIFTY": 260105,
-            "FIN NIFTY": 257801, "MIDCAP SELECT": 288009,
-        }
-        token = idx_map.get(symbol)
+    # Index token map — covers both app-key names and NSE option-chain symbols
+    _IDX_TOKENS = {
+        "NIFTY 50":    256265, "NIFTY":       256265,
+        "BANK NIFTY":  260105, "BANKNIFTY":   260105, "NIFTY BANK":         260105,
+        "FIN NIFTY":   257801, "FINNIFTY":    257801, "NIFTY FIN SERVICE":  257801,
+        "MIDCAP SELECT": 288009, "MIDCPNIFTY": 288009, "NIFTY MIDCAP SELECT": 288009,
+        "INDIA VIX":   264969,
+    }
+    token = _IDX_TOKENS.get(symbol) or get_instrument_token(symbol, exchange)
     if not token:
         return pd.DataFrame()
 

@@ -660,7 +660,7 @@ active_sym_key = st.session_state.active_symbol
 active_sym = SYMBOLS.get(active_sym_key, _make_sym(active_sym_key))
 
 # ── Market state (used throughout) ──
-indices_data = _load_indices()
+indices_data = {} if kite_live else _load_indices()
 now_ist = datetime.now(IST)
 mkt_open = is_market_open()
 mkt_color = "#4caf50" if mkt_open else "#ef4444"
