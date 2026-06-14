@@ -942,16 +942,6 @@ poll();
 setInterval(poll, 2000);
 </script></body></html>""", height=_wl_row_h, scrolling=False)
 
-    # Manual add / remove
-    wl_input = st.text_input("Add", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
-    if wl_input.strip():
-        inp = wl_input.strip()
-        if inp.startswith("-"):
-            remove_from_watchlist(inp.lstrip("- ").upper()); st.rerun()
-        else:
-            sym_to_add = inp.lstrip("+ ").upper()
-            candidates = _find_symbol_candidates(sym_to_add)
-            add_to_watchlist(candidates[0] if candidates else sym_to_add); st.rerun()
 
 
 with main_col:
