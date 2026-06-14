@@ -759,15 +759,12 @@ if not saved_watchlist:
 # All symbols to quote: watchlist + active (in case active isn't in watchlist)
 _quote_set = tuple(sorted(set(saved_watchlist) | {active_sym_key}))
 
-# ── Parallel prefetch: start chart + news in background threads ──
-# This lets _load_kite_quotes, _load_chart_and_indicators, and _load_news
-# all execute concurrently instead of sequentially (saves 3-6s on cold cache).
+# ── Parallel prefetch: start chart in background thread ──
 import threading as _th
 _pf_nse = active_sym.get("nse", "")
 _pf_yf  = active_sym.get("yf", "")
 _pf_tf  = st.session_state.get("chart_tf", "5m")
 _pf_chart_res: list = [None]
-_pf_news_res:  list = [None]
 
 def _bg_chart():
     try:
@@ -775,16 +772,8 @@ def _bg_chart():
     except Exception:
         pass
 
-def _bg_news():
-    try:
-        _pf_news_res[0] = _load_news()
-    except Exception:
-        pass
-
 _t_chart = _th.Thread(target=_bg_chart, daemon=True)
-_t_news  = _th.Thread(target=_bg_news,  daemon=True)
 _t_chart.start()
-_t_news.start()
 
 # Main thread fetches kite quotes while background threads run
 kite_quotes = _load_kite_quotes(_quote_set) if kite_live else {}
@@ -923,6 +912,195 @@ with left_col:
 
 
 with main_col:
+    # ── Admin button (top-right) ──────────────────────────────────
+    _mc_gap, _mc_admin_col = st.columns([20, 4])
+    with _mc_admin_col:
+        _show_adm = st.session_state.get("show_admin", False)
+        if st.button("✕ Admin" if _show_adm else "⚙ Admin", key="admin_toggle", use_container_width=True):
+            st.session_state.show_admin = not _show_adm
+            st.rerun()
+
+    # ── Admin panel (shown when toggled) ─────────────────────────
+    if st.session_state.get("show_admin"):
+        _adm_spot   = st.session_state.get("_adm_spot", 0)
+        _adm_signal = st.session_state.get("_adm_signal", {})
+        _adm_action = st.session_state.get("_adm_action", "BUY")
+        _adm_ok     = st.session_state.get("_adm_data_ok", False)
+
+        with st.container(border=True):
+            _adm_zerodha_col, _adm_sms_col = st.columns([1, 1])
+
+            # ── Left: Zerodha connect ──────────────────────────────
+            with _adm_zerodha_col:
+                if kite_live:
+                    try:
+                        _adm_profile = zerodha_api.get_profile()
+                        _adm_margins = zerodha_api.get_margins()
+                        _adm_cash    = (_adm_margins.get("equity",{}).get("available",{}).get("cash",0) or
+                                        _adm_margins.get("equity",{}).get("available",{}).get("live_balance",0))
+                        _adm_uname   = _adm_profile.get("user_name","--")
+                        _adm_uid     = _adm_profile.get("user_id","--")
+                    except Exception:
+                        _adm_uname, _adm_uid, _adm_cash = "--","--",0
+                    st.markdown(f"""
+<div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:8px;padding:10px;margin-bottom:10px;">
+  <div style="color:#4caf50;font-weight:700;font-size:0.85em;margin-bottom:6px;">⚡ ZERODHA CONNECTED</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
+      <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">ACCOUNT</div>
+      <div style="color:#e8e8e8;font-weight:600;font-size:0.78em;">{_adm_uname}</div>
+      <div style="color:#4b5563;font-size:0.6em;">{_adm_uid}</div>
+    </div>
+    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
+      <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">MARGIN</div>
+      <div style="color:#4caf50;font-weight:700;font-size:0.85em;">₹{_adm_cash:,.0f}</div>
+    </div>
+    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:5px 7px;">
+      <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">DATA</div>
+      <div style="color:#7c3aed;font-weight:700;font-size:0.78em;">⚡ LIVE</div>
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
+                    _adm_pc, _adm_oc = st.columns(2)
+                    with _adm_pc:
+                        st.markdown('<div style="color:#9ca3af;font-size:0.75em;font-weight:600;margin-bottom:4px;">Positions</div>', unsafe_allow_html=True)
+                        try:
+                            _positions = zerodha_api.get_positions().get("day",[])
+                            for _p in (_positions or [])[:5]:
+                                _pnl = _p.get("pnl",0)
+                                _pc  = "#4caf50" if _pnl>=0 else "#ef4444"
+                                st.markdown(f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:4px 7px;margin-bottom:2px;font-size:0.72em;display:flex;justify-content:space-between;"><span style="color:#e8e8e8;">{_p.get("tradingsymbol","")}</span><span style="color:{_pc};">{_pnl:+,.0f}</span></div>', unsafe_allow_html=True)
+                            if not _positions: st.caption("No positions")
+                        except: st.caption("--")
+                    with _adm_oc:
+                        st.markdown('<div style="color:#9ca3af;font-size:0.75em;font-weight:600;margin-bottom:4px;">Orders</div>', unsafe_allow_html=True)
+                        try:
+                            _orders = zerodha_api.get_orders()
+                            for _o in (_orders or [])[-5:]:
+                                _os = _o.get("status","")
+                                _osc = "#4caf50" if _os=="COMPLETE" else ("#ef4444" if _os=="REJECTED" else "#f59e0b")
+                                st.markdown(f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:4px 7px;margin-bottom:2px;font-size:0.72em;display:flex;justify-content:space-between;"><span style="color:#e8e8e8;">{_o.get("tradingsymbol","")}</span><span style="color:{_osc};">{_os}</span></div>', unsafe_allow_html=True)
+                            if not _orders: st.caption("No orders")
+                        except: st.caption("--")
+                    if st.button("Disconnect Zerodha", key="adm_kite_disconnect", type="secondary"):
+                        zerodha_api._save_token("","")
+                        st.session_state.kite_restore_attempted = False
+                        st.rerun()
+
+                elif kite_configured:
+                    _adm_login_url = zerodha_api.get_login_url()
+                    st.markdown(f"""
+<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:8px;padding:14px;text-align:center;">
+  <div style="color:#e8e8e8;font-weight:700;margin-bottom:5px;">Zerodha API Configured</div>
+  <div style="color:#6b7280;font-size:0.78em;margin-bottom:12px;">Log in once daily. Token expires at midnight IST.</div>
+  <a href="{_adm_login_url}" target="_blank" style="background:#7c3aed;color:white;padding:8px 20px;border-radius:6px;font-weight:700;font-size:0.85em;text-decoration:none;">Connect Zerodha →</a>
+</div>""", unsafe_allow_html=True)
+
+                else:
+                    st.info("Zerodha not configured. Add KITE_API_KEY and KITE_API_SECRET to environment variables.")
+
+            # ── Right: SMS Admin ───────────────────────────────────
+            with _adm_sms_col:
+                _adm_subs    = get_subscribers()
+                _adm_smslog  = get_sms_log()
+                _adm_now_str = now_ist.strftime("%Y-%m-%d")
+                _adm_sent_td = len([e for e in _adm_smslog if e.get("timestamp","")[:10]==_adm_now_str])
+                _adm_deliv   = len([e for e in _adm_smslog if e.get("timestamp","")[:10]==_adm_now_str and e.get("status")=="sent"])
+                _adm_drate   = round(_adm_deliv/_adm_sent_td*100) if _adm_sent_td else 0
+                _adm_credits = max(0, 10000 - len(_adm_smslog))
+
+                st.markdown(f"""
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px;">
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px;">
+    <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SUBSCRIBERS</div>
+    <div style="color:#e8e8e8;font-size:1.5em;font-weight:700;">{len(_adm_subs)}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px;">
+    <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">SENT TODAY</div>
+    <div style="color:#e8e8e8;font-size:1.5em;font-weight:700;">{_adm_sent_td}</div>
+    <div style="color:#6b7280;font-size:0.58em;">{_adm_drate}% delivered</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:7px;">
+    <div style="color:#6b7280;font-size:0.5em;text-transform:uppercase;">DELIVERY</div>
+    <div style="color:#e8e8e8;font-size:1.5em;font-weight:700;">{_adm_drate}%</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+                # Add subscriber
+                _adm_ac1, _adm_ac2, _adm_ac3 = st.columns([3,2,1])
+                with _adm_ac1:
+                    _adm_phone = st.text_input("Phone", placeholder="+91XXXXXXXXXX", key="adm_new_phone", label_visibility="collapsed")
+                with _adm_ac2:
+                    _adm_name = st.text_input("Name", placeholder="Name", key="adm_new_name", label_visibility="collapsed")
+                with _adm_ac3:
+                    if st.button("+ Add", key="adm_add_sub", use_container_width=True, type="primary"):
+                        if _adm_phone.strip():
+                            if add_subscriber(_adm_phone.strip(), _adm_name.strip()): st.success("Added!"); st.rerun()
+                            else: st.warning("Already exists.")
+                        else: st.error("Enter phone.")
+
+                # Subscriber list
+                if _adm_subs:
+                    _adm_tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.72em;"><thead><tr style="background:#12121f;"><th style="padding:4px 6px;color:#4b5563;text-align:left;border-bottom:1px solid #2a2a4a;">NAME</th><th style="padding:4px 6px;color:#4b5563;text-align:left;border-bottom:1px solid #2a2a4a;">PHONE</th><th style="padding:4px 6px;color:#4b5563;border-bottom:1px solid #2a2a4a;">STATUS</th></tr></thead><tbody>'
+                    for _s in _adm_subs[:10]:
+                        _ia = _s.get("active", True)
+                        _sc = "#4caf50" if _ia else "#ef4444"
+                        _ph = _s.get("phone","")
+                        _mk = f"+91 {_ph[:2]}{'•'*4}{_ph[-3:]}" if len(_ph)==10 else _ph
+                        _adm_tbl += f'<tr style="border-bottom:1px solid rgba(42,42,74,0.4);"><td style="padding:4px 6px;color:#e8e8e8;">{_s.get("name","-")}</td><td style="padding:4px 6px;color:#9ca3af;">{_mk}</td><td style="padding:4px 6px;text-align:center;"><span style="color:{_sc};font-size:0.78em;">●</span></td></tr>'
+                    _adm_tbl += '</tbody></table>'
+                    st.markdown(_adm_tbl, unsafe_allow_html=True)
+                    _adm_rc1, _adm_rc2 = st.columns([3,1])
+                    with _adm_rc1:
+                        _adm_rem = st.text_input("Remove", placeholder="Phone to remove", key="adm_rem_phone", label_visibility="collapsed")
+                    with _adm_rc2:
+                        if st.button("Remove", key="adm_rem_btn", use_container_width=True):
+                            if _adm_rem.strip():
+                                if remove_subscriber(_adm_rem.strip()): st.success("Removed."); st.rerun()
+                                else: st.warning("Not found.")
+                else:
+                    st.caption("No subscribers yet.")
+
+                # Broadcast
+                st.markdown('<div style="color:#6b7280;font-size:0.58em;text-transform:uppercase;letter-spacing:1px;margin:8px 0 4px;">BROADCAST</div>', unsafe_allow_html=True)
+                _adm_templates = {
+                    "Entry signal": f"🔔 SIGNAL | {'BULLISH' if _adm_action=='BUY' else 'BEARISH'}\n{active_sym_key} {_atm_strike(_adm_spot or 0)} {'CE' if _adm_action=='BUY' else 'PE'}\nEntry: {_adm_spot or '--'}\nSL: {_adm_signal.get('stop_loss') or '--'}\nT1: {_adm_signal.get('target') or '--'}\nReply STOP to unsubscribe",
+                    "Target hit":   f"✅ TARGET HIT\n{active_sym_key}\nBooked profit!",
+                    "Stop loss":    f"⛔ STOP LOSS\n{active_sym_key} SL triggered\nExit immediately.",
+                    "Alert":        f"⚡ MARKET ALERT\n{active_sym_key} unusual activity",
+                }
+                _adm_sel_tmpl = st.session_state.get("adm_selected_template","Entry signal")
+                _adm_tc = st.columns(2)
+                for _i, (_lbl, _) in enumerate(_adm_templates.items()):
+                    with _adm_tc[_i%2]:
+                        if st.button(_lbl, key=f"adm_tmpl_{_lbl}", use_container_width=True,
+                                     type="primary" if _adm_sel_tmpl==_lbl else "secondary"):
+                            st.session_state["adm_selected_template"] = _lbl; st.rerun()
+                _adm_msg = st.text_area("Message", value=_adm_templates.get(_adm_sel_tmpl,""), height=80,
+                                        key="adm_bc_message", label_visibility="collapsed")
+                if st.button("📤 Send to all subscribers", key="adm_bc_send", use_container_width=True, type="primary"):
+                    if not _adm_subs:
+                        st.warning("No subscribers.")
+                    elif not _adm_msg.strip():
+                        st.error("Message is empty.")
+                    else:
+                        _adm_trade = {
+                            "instrument": active_sym_key, "strike": str(_atm_strike(_adm_spot or 0)),
+                            "option_type": "CE" if _adm_action=="BUY" else "PE",
+                            "expiry": "Weekly", "entry_price": _adm_spot or 0,
+                            "target_price": _adm_signal.get("target") or round((_adm_spot or 23000)*1.01,2),
+                            "stop_loss": _adm_signal.get("stop_loss") or round((_adm_spot or 23000)*0.997,2),
+                            "quantity": 1,
+                        }
+                        _adm_results = send_sms_to_all(_adm_trade, action="BUY")
+                        _adm_sent_n = sum(1 for r in _adm_results if r.get("status")=="sent")
+                        _adm_fail_n = sum(1 for r in _adm_results if r.get("status")=="failed")
+                        if _adm_sent_n > 0: st.success(f"✓ Sent to {_adm_sent_n} subscriber(s)")
+                        elif _adm_fail_n > 0: st.error(f"Failed ({_adm_fail_n}): check Fast2SMS key")
+                        else: st.info("No active subscribers.")
+
+        st.markdown('<div style="border-bottom:1px solid #1e1e2e;margin:4px 0 8px;"></div>', unsafe_allow_html=True)
+
     _chart_tab, _oc_tab, _scan_tab, _picks_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner", "🎯  Sector Picks"])
     # Programmatic tab navigation (triggered from Sector Picks buttons)
     _nav_to = st.session_state.get("navigate_to_tab")
@@ -1034,6 +1212,11 @@ with _chart_tab:
     data_ok = (spot_price is not None) and (df is not None) and (not df.empty)
 
     action = signal.get("action", "HOLD")
+    # Cache for admin panel (rendered before chart tab on next rerun)
+    st.session_state["_adm_spot"]    = spot_price
+    st.session_state["_adm_signal"]  = signal
+    st.session_state["_adm_action"]  = action
+    st.session_state["_adm_data_ok"] = data_ok
     option_rec = None
     if data_ok and action in ("BUY","SELL") and _chart_nse:
         _atm_key = _opt_strike(spot_price, active_sym_key)
@@ -1840,341 +2023,9 @@ with _picks_tab:
                 st.markdown(_rest_tbl, unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════
-#  BOTTOM TABS: AI News + SMS Admin
-# ══════════════════════════════════════════════
-# Collect prefetched news (was loading in background since the top of the script)
-_t_news.join(timeout=8)
-news_data = _pf_news_res[0] if _pf_news_res[0] is not None else []
-tab_news, tab_sms = st.tabs([f"AI News  {len(news_data)}", "SMS Admin"])
-
-
-with tab_news:
-    news_col, sent_col = st.columns([7, 3])
-
-    with news_col:
-        st.markdown('<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="background:#6366f1;color:white;padding:2px 8px;border-radius:4px;font-size:0.7em;font-weight:700;">AI</span><span style="color:#e8e8e8;font-size:0.9em;font-weight:600;">Intel Feed</span><span style="background:#ef4444;color:white;padding:1px 6px;border-radius:20px;font-size:0.58em;font-weight:700;">LIVE</span></div>', unsafe_allow_html=True)
-        filter_choice = st.radio("filter", [f"All  {len(news_data)}", "Bullish", "Bearish", "High impact"],
-                                  horizontal=True, key="news_filter_radio", label_visibility="collapsed")
-        if news_data:
-            for article in news_data[:8]:
-                headline  = article.get("headline","")
-                url       = article.get("url","")
-                summary   = article.get("summary", headline[:120])
-                analysis  = _news_sentiment(headline)
-                sentiment = article.get("sentiment", analysis["sentiment"]).upper()
-                impact    = analysis["impact"]
-                if "Bullish" in filter_choice and sentiment != "BULLISH": continue
-                if "Bearish" in filter_choice and sentiment != "BEARISH": continue
-                if "High impact" in filter_choice and "HIGH" not in impact: continue
-                sent_c = "#4caf50" if sentiment=="BULLISH" else ("#ef4444" if sentiment=="BEARISH" else "#9ca3af")
-                imp_c  = "#ef4444" if "HIGH" in impact else ("#f59e0b" if "MEDIUM" in impact else "#6b7280")
-                link   = f'<a href="{url}" target="_blank" style="color:#60a5fa;font-size:0.68em;text-decoration:none;">Read →</a>' if url else ""
-                st.markdown(f"""
-<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:10px 12px;margin:5px 0;border-left:3px solid {sent_c};">
-  <div style="display:flex;gap:8px;margin-bottom:4px;">
-    <span style="color:{sent_c};font-size:0.62em;font-weight:700;">{sentiment}</span>
-    <span style="color:{imp_c};font-size:0.62em;">{impact}</span>
-  </div>
-  <div style="color:#e8e8e8;font-size:0.84em;font-weight:600;line-height:1.4;">{headline}</div>
-  <div style="color:#9ca3af;font-size:0.75em;line-height:1.5;margin-top:4px;">{summary}</div>
-  <div style="background:#1a1a2e;border-left:2px solid #387ed1;padding:5px 8px;margin:5px 0;border-radius:0 4px 4px 0;">
-    <div style="color:#387ed1;font-size:0.58em;font-weight:700;text-transform:uppercase;">AI ACTION</div>
-    <div style="color:#d1d5db;font-size:0.74em;">{_ai_action(headline)}</div>
-  </div>
-  <div style="display:flex;justify-content:space-between;margin-top:2px;">
-    <span style="color:#4b5563;font-size:0.6em;">{article.get("source","")}</span>{link}
-  </div>
-</div>""", unsafe_allow_html=True)
-        else:
-            st.info("News loading... refreshes every 5 minutes.")
-
-    with sent_col:
-        sent_score = 50
-        try:
-            if data_ok and rsi_d and st_d and vwap_d:
-                _rv = rsi_d.get("value", 50)
-                rsi_val2 = float(_rv) if _rv is not None else 50
-                if not (0 <= rsi_val2 <= 100): rsi_val2 = 50
-                _pcr = oi_d.get("pcr", 0.8) if oi_d else 0.8
-                try: _pcr = float(_pcr); _pcr = 0.8 if not (0 <= _pcr <= 10) else _pcr
-                except Exception: _pcr = 0.8
-                sent_score = min(100, max(0,
-                    int((rsi_val2-30)/40*25) +
-                    (25 if (st_d and st_d.get("direction")==1) else 0) +
-                    (25 if (vwap_d and vwap_d.get("signal")=="BUY") else 0) +
-                    (0 if not oi_d else min(25, max(0, int(_pcr*25))))
-                ))
-        except Exception:
-            sent_score = 50
-        sent_label = "RISK-ON" if sent_score>=60 else ("RISK-OFF" if sent_score<=40 else "NEUTRAL")
-        sent_clr   = "#4caf50" if sent_score>=60 else ("#ef4444" if sent_score<=40 else "#f59e0b")
-
-        st.markdown(f"""
-<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:12px;margin-bottom:10px;">
-  <div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;">MARKET SENTIMENT</div>
-  <div style="font-size:2.1em;font-weight:700;color:#e8e8e8;">{sent_score}<span style="font-size:0.4em;color:#6b7280;"> / 100</span></div>
-  <div style="background:linear-gradient(to right,#ef4444 0%,#fbbf24 50%,#4caf50 100%);height:5px;border-radius:3px;margin:7px 0;position:relative;">
-    <div style="position:absolute;left:{sent_score}%;top:-3px;width:4px;height:11px;background:white;border-radius:2px;transform:translateX(-50%);"></div>
-  </div>
-  <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-    <span style="font-size:0.58em;color:#ef4444;">Bearish</span>
-    <span style="font-size:0.58em;color:#4caf50;">Bullish</span>
-  </div>
-  <div style="color:{sent_clr};font-size:0.7em;font-weight:700;">{sent_label}</div>
-</div>""", unsafe_allow_html=True)
-
-        open_trades = get_open_trades()
-        st.markdown('<div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;">ACTIVE SIGNALS</div>', unsafe_allow_html=True)
-        if open_trades:
-            for t in open_trades[:4]:
-                sig_c  = "#4caf50" if t.get("option_type")=="CE" else "#ef4444"
-                sig_l  = "BULLISH" if t.get("option_type")=="CE" else "BEARISH"
-                contract = f"{t.get('instrument','')} {t.get('strike','')} {t.get('option_type','')}"
-                st.markdown(f"""
-<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:8px;margin:3px 0;border-left:3px solid {sig_c};">
-  <div style="color:{sig_c};font-size:0.64em;font-weight:700;margin-bottom:2px;">{sig_l}</div>
-  <div style="color:#e8e8e8;font-size:0.78em;font-weight:600;">{contract}</div>
-  <div style="display:flex;gap:10px;margin-top:3px;font-size:0.65em;color:#6b7280;">
-    <span>E <span style="color:#e8e8e8;">{t.get('entry_price',0)}</span></span>
-    <span>SL <span style="color:#ef4444;">{t.get('stop_loss',0)}</span></span>
-    <span>T <span style="color:#4caf50;">{t.get('target_price',0)}</span></span>
-  </div>
-</div>""", unsafe_allow_html=True)
-        else:
-            st.markdown('<div style="color:#4b5563;font-size:0.75em;padding:6px 0;">No active signals.</div>', unsafe_allow_html=True)
-
-        if data_ok and rsi_d:
-            st.markdown('<div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px;">CLAUDE ANALYSIS</div>', unsafe_allow_html=True)
-            with st.spinner("AI analyzing..."):
-                try:
-                    analysis_text = analyze_market(
-                        {"nifty": spot_price if active_sym.get("nse")=="NIFTY" else None,
-                         "banknifty": spot_price if active_sym.get("nse")=="BANKNIFTY" else None},
-                        signal, rsi_d, macd_d, st_d, vwap_d, oi_d, news_data,
-                    )
-                except Exception:
-                    analysis_text = "Analysis unavailable — check ANTHROPIC_API_KEY."
-            st.markdown(f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:10px;"><p style="color:#d1d5db;font-size:0.8em;line-height:1.7;margin:0;">{analysis_text}</p></div>', unsafe_allow_html=True)
-
-
-with tab_sms:
-    if st.session_state.get("kite_just_connected"):
-        st.session_state.pop("kite_just_connected", None)
-
-    st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin:8px 0 12px;"></div>', unsafe_allow_html=True)
-    if kite_live:
-        try:
-            profile = zerodha_api.get_profile()
-            margins = zerodha_api.get_margins()
-            cash    = (margins.get("equity",{}).get("available",{}).get("cash",0) or
-                       margins.get("equity",{}).get("available",{}).get("live_balance",0))
-            user_name = profile.get("user_name","--")
-            user_id   = profile.get("user_id","--")
-        except Exception:
-            user_name, user_id, cash = "--","--",0
-        st.markdown(f"""
-<div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:8px;padding:11px;margin-bottom:12px;">
-  <div style="color:#4caf50;font-weight:700;font-size:0.88em;margin-bottom:8px;">⚡ ZERODHA CONNECTED</div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;">
-    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:6px 8px;">
-      <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">ACCOUNT</div>
-      <div style="color:#e8e8e8;font-weight:600;font-size:0.82em;">{user_name}</div>
-      <div style="color:#4b5563;font-size:0.65em;">{user_id}</div>
-    </div>
-    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:6px 8px;">
-      <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">MARGIN</div>
-      <div style="color:#4caf50;font-weight:700;">₹{cash:,.0f}</div>
-    </div>
-    <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:5px;padding:6px 8px;">
-      <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">DATA</div>
-      <div style="color:#7c3aed;font-weight:700;font-size:0.82em;">⚡ REAL-TIME</div>
-    </div>
-  </div>
-</div>""", unsafe_allow_html=True)
-        pos_col, ord_col = st.columns(2)
-        with pos_col:
-            st.markdown('<div style="color:#9ca3af;font-size:0.76em;font-weight:600;margin-bottom:5px;">Positions</div>', unsafe_allow_html=True)
-            try:
-                positions = zerodha_api.get_positions().get("day",[])
-                for p in (positions or [])[:6]:
-                    pnl = p.get("pnl",0)
-                    clr = "#4caf50" if pnl>=0 else "#ef4444"
-                    st.markdown(f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:5px 8px;margin-bottom:3px;font-size:0.74em;display:flex;justify-content:space-between;"><span style="color:#e8e8e8;">{p.get("tradingsymbol","")}</span><span style="color:{clr};">{pnl:+,.0f}</span></div>', unsafe_allow_html=True)
-                if not positions: st.caption("No positions today")
-            except: st.caption("--")
-        with ord_col:
-            st.markdown('<div style="color:#9ca3af;font-size:0.76em;font-weight:600;margin-bottom:5px;">Orders</div>', unsafe_allow_html=True)
-            try:
-                orders = zerodha_api.get_orders()
-                for o in (orders or [])[-6:]:
-                    s = o.get("status","")
-                    sc = "#4caf50" if s=="COMPLETE" else ("#ef4444" if s=="REJECTED" else "#f59e0b")
-                    st.markdown(f'<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:4px;padding:5px 8px;margin-bottom:3px;font-size:0.74em;display:flex;justify-content:space-between;"><span style="color:#e8e8e8;">{o.get("tradingsymbol","")}</span><span style="color:{sc};">{s}</span></div>', unsafe_allow_html=True)
-                if not orders: st.caption("No orders today")
-            except: st.caption("--")
-        if st.button("Disconnect Zerodha", key="kite_disconnect", type="secondary"):
-            zerodha_api._save_token("","")
-            st.session_state.kite_restore_attempted = False; st.rerun()
-    elif kite_configured:
-        login_url = zerodha_api.get_login_url()
-        st.markdown(f"""
-<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:8px;padding:16px;margin-bottom:12px;text-align:center;">
-  <div style="color:#e8e8e8;font-weight:700;margin-bottom:6px;">Zerodha API Keys Detected</div>
-  <div style="color:#6b7280;font-size:0.8em;margin-bottom:14px;">Log in once daily. Token expires at midnight IST.</div>
-  <a href="{login_url}" target="_blank" style="background:#7c3aed;color:white;padding:9px 24px;border-radius:6px;font-weight:700;font-size:0.88em;text-decoration:none;">Connect Zerodha →</a>
-</div>""", unsafe_allow_html=True)
-    else:
-        st.info("Zerodha not configured. Add KITE_API_KEY and KITE_API_SECRET to Railway/VPS environment variables.")
-
-    st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin-bottom:12px;"></div>', unsafe_allow_html=True)
-
-    subs_list = get_subscribers()
-    sms_log   = get_sms_log()
-    now_str   = now_ist.strftime("%Y-%m-%d")
-    signals_today   = len([e for e in sms_log if e.get("timestamp","")[:10]==now_str])
-    delivered_today = len([e for e in sms_log if e.get("timestamp","")[:10]==now_str and e.get("status")=="sent"])
-    delivery_rate   = round(delivered_today/signals_today*100) if signals_today else 0
-    credits_left    = max(0, 10000 - len(sms_log))
-
-    st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:12px;">
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:9px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">SUBSCRIBERS</div>
-    <div style="color:#e8e8e8;font-size:1.7em;font-weight:700;">{len(subs_list)}</div>
-  </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:9px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">SENT TODAY</div>
-    <div style="color:#e8e8e8;font-size:1.7em;font-weight:700;">{signals_today}</div>
-    <div style="color:#6b7280;font-size:0.6em;">{delivery_rate}% delivered</div>
-  </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:9px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">SMS CREDITS</div>
-    <div style="color:#e8e8e8;font-size:1.7em;font-weight:700;">{credits_left:,}</div>
-  </div>
-  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:9px;">
-    <div style="color:#6b7280;font-size:0.52em;text-transform:uppercase;">DELIVERY RATE</div>
-    <div style="color:#e8e8e8;font-size:1.7em;font-weight:700;">{delivery_rate}%</div>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-    sms_left_col, sms_right_col = st.columns([3, 2])
-
-    with sms_left_col:
-        st.markdown('<div style="color:#e8e8e8;font-size:0.88em;font-weight:600;margin-bottom:8px;">SUBSCRIBERS</div>', unsafe_allow_html=True)
-        sub_filter = st.radio("sub_f", ["All","Active","Inactive"], horizontal=True, key="sub_filter", label_visibility="collapsed")
-        search_sub = st.text_input("Search", placeholder="Search by phone or name...", key="search_sub", label_visibility="collapsed")
-        add_col1, add_col2, add_col3 = st.columns([3,2,1])
-        with add_col1:
-            new_phone = st.text_input("Phone", placeholder="+91XXXXXXXXXX", key="new_phone", label_visibility="collapsed")
-        with add_col2:
-            new_name = st.text_input("Name", placeholder="Name", key="new_name", label_visibility="collapsed")
-        with add_col3:
-            if st.button("+ Add", key="add_sub_btn", use_container_width=True, type="primary"):
-                if new_phone.strip():
-                    if add_subscriber(new_phone.strip(), new_name.strip()): st.success("Added!"); st.rerun()
-                    else: st.warning("Already exists.")
-                else: st.error("Enter phone number.")
-
-        if subs_list:
-            filtered = [s for s in subs_list
-                        if not search_sub or search_sub.lower() in s.get("phone","").lower()
-                        or search_sub.lower() in s.get("name","").lower()]
-            tbl_h = '<table style="width:100%;border-collapse:collapse;font-size:0.75em;"><thead><tr style="background:#12121f;">'
-            for h in ["NAME","PHONE","STATUS"]:
-                tbl_h += f'<th style="padding:5px 7px;color:#4b5563;text-align:left;border-bottom:1px solid #2a2a4a;">{h}</th>'
-            tbl_h += '</tr></thead><tbody>'
-            for s in filtered[:20]:
-                is_active = s.get("active", True)
-                if sub_filter=="Active" and not is_active: continue
-                if sub_filter=="Inactive" and is_active: continue
-                sc = "#4caf50" if is_active else "#ef4444"
-                sl = "ACTIVE" if is_active else "PAUSED"
-                phone  = s.get("phone","")
-                masked = f"+91 {phone[:2]}{'•'*4}{phone[-3:]}" if len(phone)==10 else phone
-                tbl_h += f'<tr style="border-bottom:1px solid rgba(42,42,74,0.4);"><td style="padding:5px 7px;color:#e8e8e8;">{s.get("name","-")}</td><td style="padding:5px 7px;color:#9ca3af;">{masked}</td><td style="padding:5px 7px;"><span style="color:{sc};font-size:0.78em;">● {sl}</span></td></tr>'
-            tbl_h += '</tbody></table>'
-            st.markdown(tbl_h, unsafe_allow_html=True)
-            rem_col1, rem_col2 = st.columns([3,1])
-            with rem_col1:
-                rem_phone = st.text_input("Remove", placeholder="Phone to remove", key="rem_phone", label_visibility="collapsed")
-            with rem_col2:
-                if st.button("Remove", key="rem_sub_btn", use_container_width=True):
-                    if rem_phone.strip():
-                        if remove_subscriber(rem_phone.strip()): st.success("Removed."); st.rerun()
-                        else: st.warning("Not found.")
-        else:
-            st.info("No subscribers yet. Add numbers above.")
-
-        st.markdown('<div style="color:#6b7280;font-size:0.58em;text-transform:uppercase;letter-spacing:1px;margin:10px 0 5px;">DELIVERY LOG</div>', unsafe_allow_html=True)
-        if sms_log:
-            log_tbl = '<table style="width:100%;border-collapse:collapse;font-size:0.73em;"><thead><tr style="background:#12121f;"><th style="padding:5px 6px;color:#4b5563;text-align:left;border-bottom:1px solid #2a2a4a;">TIME</th><th style="padding:5px 6px;color:#4b5563;text-align:left;border-bottom:1px solid #2a2a4a;">SIGNAL</th><th style="padding:5px 6px;color:#4b5563;text-align:center;border-bottom:1px solid #2a2a4a;">STATUS</th></tr></thead><tbody>'
-            seen_ts, count = set(), 0
-            for entry in reversed(sms_log[-50:]):
-                ts_short = entry.get("timestamp","")[:16]
-                if ts_short in seen_ts or count >= 6: continue
-                seen_ts.add(ts_short); count += 1
-                sc = "#4caf50" if entry.get("status")=="sent" else "#ef4444"
-                log_tbl += f'<tr style="border-bottom:1px solid rgba(42,42,74,0.3);"><td style="padding:5px 6px;color:#6b7280;">{ts_short[11:]}</td><td style="padding:5px 6px;color:#d1d5db;">{entry.get("message","")[:28]}...</td><td style="padding:5px 6px;text-align:center;color:{sc};font-weight:600;">{entry.get("status","--")}</td></tr>'
-            log_tbl += '</tbody></table>'
-            st.markdown(log_tbl, unsafe_allow_html=True)
-        else:
-            st.caption("No SMS sent yet.")
-
-    with sms_right_col:
-        st.markdown("""
-<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:12px;">
-  <div style="color:#e8e8e8;font-size:0.88em;font-weight:600;margin-bottom:3px;">BROADCAST</div>
-  <div style="color:#6b7280;font-size:0.65em;margin-bottom:10px;">Manual signal send to all subscribers.</div>
-""", unsafe_allow_html=True)
-        templates = {
-            "Entry signal": f"🔔 SIGNAL | {'BULLISH' if action=='BUY' else 'BEARISH'}\n{active_sym_key} {_atm_strike(spot_price if data_ok else 0)} {'CE' if action=='BUY' else 'PE'}\nEntry: {spot_price if data_ok else '--'}\nSL: {signal.get('stop_loss') or '--'}\nT1: {signal.get('target') or '--'}\nReply STOP to unsubscribe",
-            "Target hit":   f"✅ TARGET HIT\n{active_sym_key}\nBooked profit!\nReply STOP to unsubscribe",
-            "Stop loss":    f"⛔ STOP LOSS\n{active_sym_key} SL triggered\nExit immediately.\nReply STOP to unsubscribe",
-            "Alert":        f"⚡ MARKET ALERT\n{active_sym_key} unusual activity\nMonitor closely.\nReply STOP to unsubscribe",
-        }
-        selected_template = st.session_state.get("selected_template","Entry signal")
-        tmpl_cols = st.columns(2)
-        for i, (label, _) in enumerate(templates.items()):
-            with tmpl_cols[i%2]:
-                if st.button(label, key=f"tmpl_{label}", use_container_width=True,
-                              type="primary" if selected_template==label else "secondary"):
-                    st.session_state["selected_template"] = label; st.rerun()
-
-        default_msg = templates.get(selected_template,"")
-        bc_message = st.text_area("Message", value=default_msg, height=120, key="bc_message", label_visibility="collapsed")
-        st.markdown(f'<div style="text-align:right;color:#4b5563;font-size:0.62em;">{len(bc_message)}/160</div>', unsafe_allow_html=True)
-
-        if st.button("Send broadcast", key="bc_send", use_container_width=True, type="primary"):
-            if not subs_list:
-                st.warning("No subscribers.")
-            elif not bc_message.strip():
-                st.error("Message is empty.")
-            else:
-                spot_val = spot_price if data_ok else 23000
-                test_trade = {
-                    "instrument": active_sym_key,
-                    "strike": str(_atm_strike(spot_val)),
-                    "option_type": "CE" if action=="BUY" else "PE",
-                    "expiry": "Weekly", "entry_price": spot_val,
-                    "target_price": signal.get("target") or round(spot_val*1.01,2),
-                    "stop_loss": signal.get("stop_loss") or round(spot_val*0.997,2),
-                    "quantity": 1,
-                }
-                results = send_sms_to_all(test_trade, action="BUY")
-                sent = sum(1 for r in results if r.get("status")=="sent")
-                fail = sum(1 for r in results if r.get("status")=="failed")
-                if sent > 0: st.success(f"✓ Sent to {sent} subscriber(s)")
-                elif fail > 0: st.error(f"Failed ({fail}): check Fast2SMS API key")
-                else: st.info("No active subscribers.")
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.caption("Educational use only — not buy/sell recommendations.")
-
-
 st.markdown(
-    f'<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
-    f'For educational purposes only. Not financial advice. '
-    f'Prices update live every 2s. Indicators refresh every 10min. Not financial advice.'
-    f'</div>',
+    '<div style="border-top:1px solid #2a2a4a;margin-top:10px;padding:6px 4px;color:#4b5563;font-size:0.62em;">'
+    'For educational purposes only. Not financial advice. Indicators refresh every 10min.'
+    '</div>',
     unsafe_allow_html=True,
 )
