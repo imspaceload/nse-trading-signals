@@ -126,11 +126,13 @@ if _qp.get("wl_select"):
     add_to_watchlist(_sel_sym)
     st.session_state.active_symbol = _sel_sym
     st.session_state["wl_search"] = ""
+    st.session_state.pop("_wl_cached", None)  # invalidate watchlist cache
     st.query_params.clear()
     st.rerun()
 if _qp.get("wl_delete"):
     from sms_sender import remove_from_watchlist as _rm_wl
     _rm_wl(urllib.parse.unquote_plus(_qp["wl_delete"]))
+    st.session_state.pop("_wl_cached", None)  # invalidate watchlist cache
     st.query_params.clear()
     st.rerun()
 
@@ -738,12 +740,15 @@ mkt_open = is_market_open()
 mkt_color = "#4caf50" if mkt_open else "#ef4444"
 mkt_text  = "LIVE" if mkt_open else "CLOSED"
 
-# ── Watchlist + live Kite quotes (fetched once, used in both columns) ──
-saved_watchlist = get_watchlist()
+# ── Watchlist — cached in session_state to avoid a Supabase round-trip on every rerun ──
+if "_wl_cached" not in st.session_state:
+    st.session_state["_wl_cached"] = get_watchlist()
+saved_watchlist = st.session_state["_wl_cached"]
 if not saved_watchlist:
     for _d in ["NIFTY 50","BANK NIFTY","FIN NIFTY","MIDCAP SELECT","MCX CRUDE OIL","MCX NATURAL GAS","RELIANCE","HDFC BANK","TCS","INFOSYS"]:
         add_to_watchlist(_d)
-    saved_watchlist = get_watchlist()
+    st.session_state["_wl_cached"] = get_watchlist()
+    saved_watchlist = st.session_state["_wl_cached"]
 
 # All symbols to quote: watchlist + active (in case active isn't in watchlist)
 _quote_set = tuple(sorted(set(saved_watchlist) | {active_sym_key}))
@@ -1111,7 +1116,7 @@ with _chart_tab:
                 if closed: send_sms_to_all(closed, action="EXIT")
 
     # ── Symbol header + Signal box (always visible) ──
-    pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
+    # pivots already computed inside _load_chart_and_indicators (no duplicate call needed)
     if data_ok:
         day_chg = df["Close"].iloc[-1] - df["Open"].iloc[0]
         day_pct = (day_chg / df["Open"].iloc[0]) * 100
