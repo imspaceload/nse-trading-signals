@@ -787,7 +787,14 @@ if kite_live:
     # Kite quotes already fetched above — use them directly, skip yfinance entirely
     wl_prices  = {k: v["ltp"]  for k, v in kite_quotes.items() if v.get("ltp")}
     wl_changes = {k: v["pct"]  for k, v in kite_quotes.items() if v.get("pct") is not None}
+elif kite_configured:
+    # Kite keys exist but session expired — skip yfinance (would hang with 20+ symbols).
+    # The JS watchlist iframe polls /api/live/watchlist every 2s anyway.
+    # User just needs to re-login Kite to restore live prices.
+    wl_prices  = {}
+    wl_changes = {}
 else:
+    # No Kite at all — use yfinance as data source
     wl_prices  = _load_wl_prices(tuple(saved_watchlist)) if saved_watchlist else {}
     wl_changes = _load_wl_changes(tuple(saved_watchlist)) if saved_watchlist else {}
 
