@@ -49,10 +49,23 @@ IST = pytz.timezone("Asia/Kolkata")
 _TV_INT = {"1m": "1", "3m": "3", "5m": "5", "15m": "15", "1h": "60", "1D": "D"}
 
 SYMBOL_ALIASES = {
+    # Indices
     "NIFTY": "NIFTY 50", "NIFTY50": "NIFTY 50",
-    "BANKNIFTY": "BANK NIFTY", "INFY": "INFOSYS",
-    "HDFCBANK": "HDFC BANK", "ICICIBANK": "ICICI BANK",
+    "BANKNIFTY": "BANK NIFTY", "FINNIFTY": "FIN NIFTY",
+    "VIX": "INDIA VIX", "INDIAVIX": "INDIA VIX",
+    # Common tickers → full name
+    "INFY": "INFOSYS", "HDFCBANK": "HDFC BANK", "ICICIBANK": "ICICI BANK",
     "MM": "M&M", "BAJAJAUTO": "BAJAJ-AUTO",
+    "KOTAKBANK": "KOTAK MAHINDRA BANK", "KOTAK": "KOTAK MAHINDRA BANK",
+    "YESBANK": "YES BANK", "YES": "YES BANK",
+    "SBIN": "STATE BANK OF INDIA", "SBI": "STATE BANK OF INDIA",
+    "ONGC": "ONGC", "NTPC": "NTPC",
+    "CRUDE": "MCX CRUDE OIL", "CRUDEOIL": "MCX CRUDE OIL",
+    "NATURALGAS": "MCX NATURAL GAS", "NATGAS": "MCX NATURAL GAS",
+    "GOLD": "MCX GOLD", "SILVER": "MCX SILVER",
+    "COPPER": "MCX COPPER", "ZINC": "MCX ZINC",
+    "NICKEL": "MCX NICKEL", "LEAD": "MCX LEAD",
+    "ALUMINIUM": "MCX ALUMINIUM", "ALUMINUM": "MCX ALUMINIUM",
 }
 
 # NSE F&O stocks grouped by sector (trading symbols)
@@ -149,7 +162,9 @@ div[data-testid="stRadio"] > div > label { background: transparent !important; b
 div[data-testid="stRadio"] > div > label:has(input:checked) { background: #1e293b !important; color: #e8e8e8 !important; font-weight: 600 !important; }
 div[data-testid="stRadio"] > div > label > div:first-child { display: none !important; }
 div[data-testid="stRadio"] label p { margin: 0 !important; }
-[data-testid="stTextInput"] input { background: #12121f !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #e8e8e8 !important; font-size: 0.82em !important; padding: 5px 9px !important; }
+[data-testid="stTextInput"] input { background: #1a1a2e !important; border: 1px solid #3a3a5a !important; border-radius: 6px !important; color: #f0f0f0 !important; font-size: 0.84em !important; padding: 6px 10px !important; caret-color: #387ed1 !important; }
+[data-testid="stTextInput"] input::placeholder { color: #6b7280 !important; }
+[data-testid="stTextInput"] input:focus { border-color: #387ed1 !important; outline: none !important; box-shadow: 0 0 0 2px rgba(56,126,209,0.25) !important; background: #1e1e32 !important; }
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div:first-child { background: #12121f !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #e8e8e8 !important; font-size: 0.82em !important; min-height: 32px !important; }
 button[kind="primary"] { background: #387ed1 !important; border: none !important; border-radius: 6px !important; color: white !important; font-weight: 600 !important; }
 button[kind="secondary"] { background: #12121f !important; border: 1px solid #2a2a4a !important; border-radius: 6px !important; color: #d1d5db !important; }
@@ -175,23 +190,37 @@ def _make_sym(name: str) -> dict:
 
 def _find_symbol_candidates(query: str) -> list:
     q = query.strip().upper()
-    if not q: return []
+    if not q or len(q) < 2: return []
     seen, results = set(), []
     def _add(k):
         if k not in seen: seen.add(k); results.append(k)
+
+    # 1. Exact match on key or NSE symbol
     for k in SYMBOLS:
         if q == k.upper() or q == SYMBOLS[k].get("nse","").upper(): _add(k)
     if results: return results
-    if q in SYMBOL_ALIASES:
+
+    # 2. Alias lookup (e.g. "YES" → "YES BANK", "KOTAK" → "KOTAK MAHINDRA BANK")
+    alias_target = SYMBOL_ALIASES.get(q)
+    if alias_target:
         for k in SYMBOLS:
-            if k == SYMBOL_ALIASES[q]: _add(k)
+            if k.upper() == alias_target.upper(): _add(k)
     if results: return results
+
+    # 3. Starts-with on key, NSE symbol, or any word in the key
     for k in SYMBOLS:
         n = SYMBOLS[k].get("nse","").upper()
-        if k.upper().startswith(q) or n.startswith(q): _add(k)
+        dn = SYMBOL_SHORT.get(k, ("",""))[1].upper()
+        words = k.upper().split()
+        if k.upper().startswith(q) or n.startswith(q) or any(w.startswith(q) for w in words) or dn.startswith(q):
+            _add(k)
+
+    # 4. Substring match on key, NSE symbol, or display name
     for k in SYMBOLS:
         n = SYMBOLS[k].get("nse","").upper()
-        if q in k.upper() or q in n: _add(k)
+        dn = SYMBOL_SHORT.get(k, ("",""))[1].upper()
+        if q in k.upper() or q in n or q in dn: _add(k)
+
     return results[:10]
 
 def _atm_strike(price: float) -> int:
@@ -797,18 +826,20 @@ with left_col:
             import html as _html_s
             _sr = '<div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;overflow:hidden;margin:2px 0 4px;">'
             for _c in candidates[:7]:
-                _fn = _html_s.escape(SYMBOL_SHORT.get(_c, ("", _c))[1] or _c)
-                _tk = SYMBOL_SHORT.get(_c, (_c,))[0]
+                _sym_info = SYMBOLS.get(_c, {})
+                _fn = _html_s.escape(SYMBOL_SHORT.get(_c, ("", ""))[1] or _c)
+                _nse_tk = SYMBOL_SHORT.get(_c, (None,))[0] or _sym_info.get("nse") or _sym_info.get("mcx") or _c
+                _exch = "MCX" if _sym_info.get("mcx") else ("BSE" if _sym_info.get("yf","").startswith("^BSE") else "NSE")
                 _href = "?wl_select=" + urllib.parse.quote_plus(_c)
                 _is_act = _c == active_sym_key
-                _bg = "background:rgba(56,126,209,0.08);" if _is_act else ""
+                _bg = "background:rgba(56,126,209,0.1);" if _is_act else ""
                 _sr += (
                     f'<a href="{_href}" style="{_bg}display:flex;justify-content:space-between;'
                     f'align-items:center;padding:9px 12px;border-bottom:1px solid rgba(42,42,74,0.3);'
                     f'text-decoration:none;">'
-                    f'<div><span style="display:block;color:#e8e8e8;font-size:0.82em;font-weight:600;">{_fn}</span>'
-                    f'<span style="color:#4b5563;font-size:0.57em;">NSE · {_tk}</span></div>'
-                    f'<span style="color:#387ed1;font-size:0.8em;">+</span>'
+                    f'<div><span style="display:block;color:#f0f0f0;font-size:0.82em;font-weight:600;">{_fn}</span>'
+                    f'<span style="color:#6b7280;font-size:0.6em;font-weight:500;">{_exch} · {_nse_tk}</span></div>'
+                    f'<span style="color:#387ed1;font-size:0.9em;font-weight:700;">+</span>'
                     f'</a>'
                 )
             _sr += '</div>'
