@@ -121,18 +121,24 @@ if _qp.get("action") == "login" and _qp.get("request_token"):
     st.rerun()
 
 # Watchlist click handlers
+if _qp.get("active"):
+    # Row click in watchlist — just switch active symbol, no Supabase write needed
+    st.session_state.active_symbol = urllib.parse.unquote_plus(_qp["active"])
+    st.query_params.clear()
+    st.rerun()
 if _qp.get("wl_select"):
+    # Search result "+" click — add new symbol to watchlist then switch to it
     _sel_sym = urllib.parse.unquote_plus(_qp["wl_select"])
     add_to_watchlist(_sel_sym)
     st.session_state.active_symbol = _sel_sym
     st.session_state["wl_search"] = ""
-    st.session_state.pop("_wl_cached", None)  # invalidate watchlist cache
+    st.session_state.pop("_wl_cached", None)  # force watchlist refresh
     st.query_params.clear()
     st.rerun()
 if _qp.get("wl_delete"):
     from sms_sender import remove_from_watchlist as _rm_wl
     _rm_wl(urllib.parse.unquote_plus(_qp["wl_delete"]))
-    st.session_state.pop("_wl_cached", None)  # invalidate watchlist cache
+    st.session_state.pop("_wl_cached", None)
     st.query_params.clear()
     st.rerun()
 
@@ -932,7 +938,7 @@ function render(){{
     const row = document.createElement('div');
     row.className='row'+(isAct?' active':'');
     row.innerHTML=`
-      <div class="main" onclick="nav('?wl_select=${{enc}}')">
+      <div class="main" onclick="nav('?active=${{enc}}')">
         <div><span class="nm">${{s.name}}</span><span class="ex">${{s.exch}}</span></div>
         <div class="pr">${{ltpHtml}}<br>${{subHtml}}</div>
       </div>
