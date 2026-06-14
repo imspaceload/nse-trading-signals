@@ -953,8 +953,20 @@ def _load_chart_and_indicators(sym_key: str, nse_sym: str, yf_sym: str, timefram
     df = pd.DataFrame()
     spot = None
 
-    # 1. Kite historical data (fast, authoritative)
-    if nse_sym and zerodha_api.is_connected():
+    # 1. MCX commodities — use active futures contract from Kite (gives correct INR prices)
+    _mcx_commodity = SYMBOLS.get(sym_key, {}).get("mcx", "")
+    if _mcx_commodity and zerodha_api.is_connected():
+        try:
+            _mcx_sym = zerodha_api.get_mcx_active_symbol(_mcx_commodity)
+            if _mcx_sym:
+                df = zerodha_api.get_historical_data(_mcx_sym, timeframe, exchange="MCX")
+                if df is not None and not df.empty:
+                    spot = float(df["Close"].iloc[-1])
+        except Exception:
+            pass
+
+    # 2. NSE/index instruments from Kite
+    if (df is None or df.empty) and nse_sym and zerodha_api.is_connected():
         try:
             df = zerodha_api.get_historical_data(nse_sym, timeframe)
             if df is not None and not df.empty:
@@ -962,8 +974,8 @@ def _load_chart_and_indicators(sym_key: str, nse_sym: str, yf_sym: str, timefram
         except Exception:
             pass
 
-    # 2. yfinance fallback
-    if (df is None or df.empty) and yf_sym:
+    # 3. yfinance fallback — only for non-MCX symbols (MCX yfinance gives USD prices, not INR)
+    if (df is None or df.empty) and yf_sym and not _mcx_commodity:
         _period, _iv = {"1m":("5d","1m"),"3m":("5d","2m"),"5m":("5d","5m"),
                         "15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}.get(timeframe, ("5d","5m"))
         try:
