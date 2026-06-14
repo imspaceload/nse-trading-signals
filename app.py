@@ -870,95 +870,55 @@ with left_col:
                 '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
                 '</div>', unsafe_allow_html=True)
 
-    import json as _wl_json
     import html as _html
-    # Build symbol metadata for JS
-    _wl_syms_js = []
+    # Render watchlist rows as native <a href> links — no iframe, so navigation is
+    # handled directly by Streamlit's React router (soft rerun, no page reload).
+    _wl_rows = '<div style="margin:0;padding:0;">'
     for _wn in saved_watchlist:
-        _yf = SYMBOLS.get(_wn, {}).get("yf", "")
-        _exch = "MCX" if _yf.startswith(("CL=","NG=","GC=","SI=")) else ("BSE" if _yf.startswith("^BSE") else "NSE")
-        _wl_syms_js.append({
-            "key":  _wn,
-            "name": SYMBOL_SHORT.get(_wn, ("", _wn))[1] or _wn,
-            "exch": _exch,
-        })
-    _wl_syms_json  = _wl_json.dumps(_wl_syms_js)
-    _wl_init_json  = _wl_json.dumps({k: {"price": v["ltp"], "pct": v["pct"], "change": v.get("change", 0)}
-                                      for k, v in kite_quotes.items() if v.get("ltp")})
-    _wl_active_js  = active_sym_key.replace("'", "\\'")
-    _wl_row_h      = max(len(saved_watchlist) * 46 + 4, 100)
+        _sym_info = SYMBOLS.get(_wn, {})
+        _yf_s = _sym_info.get("yf", "")
+        _exch = "MCX" if _sym_info.get("mcx") else ("BSE" if _yf_s.startswith("^BSE") else "NSE")
+        _name = _html.escape(SYMBOL_SHORT.get(_wn, ("", _wn))[1] or _wn)
+        _is_active = (_wn == active_sym_key)
 
-    import streamlit.components.v1 as _wl_comp
-    _wl_comp.html(f"""<!DOCTYPE html><html><head>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif;}}
-body{{background:#0e0e1a;overflow-x:hidden;}}
-.row{{display:flex;border-bottom:1px solid rgba(42,42,74,0.35);cursor:pointer;border-left:3px solid transparent;}}
-.row:hover{{background:rgba(56,126,209,0.04);}}
-.row.active{{border-left-color:#387ed1;background:rgba(56,126,209,0.07);}}
-.main{{flex:1;display:flex;justify-content:space-between;align-items:center;padding:10px 8px 10px 11px;}}
-.nm{{color:#e8e8e8;font-size:0.82em;font-weight:600;display:block;}}
-.row.active .nm{{color:#60a5fa;}}
-.ex{{color:#4b5563;font-size:0.57em;}}
-.pr{{text-align:right;}}
-.ltp{{font-size:0.82em;font-weight:700;}}
-.sub{{font-size:0.6em;}}
-.del{{color:#2d3748;font-size:0.8em;padding:0 8px;display:flex;align-items:center;}}
-.del:hover{{color:#ef4444;}}
-</style></head><body>
-<div id="wl"></div>
-<script>
-const WL     = {_wl_syms_json};
-const ACTIVE = '{_wl_active_js}';
-let prices   = {_wl_init_json};
+        _q = kite_quotes.get(_wn, {})
+        _ltp  = _q.get("ltp", 0) or 0
+        _pct  = _q.get("pct", 0) or 0
+        _chg  = _q.get("change", 0) or 0
+        if _ltp > 0:
+            _clr  = "#4caf50" if _pct >= 0 else "#ef4444"
+            _arr  = "▲" if _pct >= 0 else "▼"
+            _sgn  = "+" if _pct >= 0 else ""
+            if _ltp >= 100000:
+                _ltp_s = f"{_ltp/100000:.2f}L"
+            elif _ltp >= 1000:
+                _ltp_s = f"{_ltp:,.2f}"
+            else:
+                _ltp_s = f"{_ltp:.2f}"
+            _price_h = (f'<span style="font-size:0.82em;font-weight:700;color:{_clr};">{_ltp_s} {_arr}</span>'
+                        f'<br><span style="font-size:0.6em;color:{_clr};">{_sgn}{abs(_chg):.2f} ({abs(_pct):.2f}%)</span>')
+        else:
+            _price_h = '<span style="font-size:0.82em;font-weight:700;color:#9ca3af;">--</span>'
 
-function fmtN(n){{
-  if(n>=100000) return (n/100000).toFixed(2)+'L';
-  if(n>=1000)   return n.toLocaleString('en-IN',{{minimumFractionDigits:2,maximumFractionDigits:2}});
-  return n.toFixed(2);
-}}
-function nav(url){{ window.parent.location.href = url; }}
+        _border = "border-left:3px solid #387ed1;background:rgba(56,126,209,0.07);" if _is_active else "border-left:3px solid transparent;"
+        _nm_clr = "#60a5fa" if _is_active else "#e8e8e8"
+        _href    = "?active="    + urllib.parse.quote_plus(_wn)
+        _del_href = "?wl_delete=" + urllib.parse.quote_plus(_wn)
 
-function render(){{
-  const wl = document.getElementById('wl');
-  wl.innerHTML = '';
-  WL.forEach(s=>{{
-    const isAct = s.key === ACTIVE;
-    const d = prices[s.key];
-    let ltpHtml='<span class="ltp" style="color:#9ca3af">--</span>', subHtml='';
-    if(d && d.price>0){{
-      const clr = d.pct>=0?'#4caf50':'#ef4444';
-      const arr = d.pct>=0?'▲':'▼';
-      const acv = Math.abs(d.change||0);
-      const sgn = d.pct>=0?'+':'-';
-      ltpHtml = `<span class="ltp" style="color:${{clr}}">${{fmtN(d.price)}} ${{arr}}</span>`;
-      subHtml = `<span class="sub" style="color:${{clr}}">${{sgn}}${{fmtN(acv)}} (${{Math.abs(d.pct).toFixed(2)}}%)</span>`;
-    }}
-    const enc = encodeURIComponent(s.key);
-    const row = document.createElement('div');
-    row.className='row'+(isAct?' active':'');
-    row.innerHTML=`
-      <div class="main" onclick="nav('?active=${{enc}}')">
-        <div><span class="nm">${{s.name}}</span><span class="ex">${{s.exch}}</span></div>
-        <div class="pr">${{ltpHtml}}<br>${{subHtml}}</div>
-      </div>
-      <span class="del" onclick="nav('?wl_delete=${{enc}}')">&#x2715;</span>`;
-    wl.appendChild(row);
-  }});
-}}
-
-render();
-
-async function poll(){{
-  const keys = WL.map(s=>s.key).join(',');
-  try{{
-    const r = await fetch('/api/live/watchlist?keys='+encodeURIComponent(keys));
-    if(r.ok){{ prices = await r.json(); render(); }}
-  }}catch(e){{}}
-}}
-poll();
-setInterval(poll, 2000);
-</script></body></html>""", height=_wl_row_h, scrolling=False)
+        _wl_rows += (
+            f'<div style="display:flex;border-bottom:1px solid rgba(42,42,74,0.35);{_border}">'
+            f'<a href="{_href}" style="flex:1;display:flex;justify-content:space-between;align-items:center;'
+            f'padding:10px 8px 10px 11px;text-decoration:none;">'
+            f'<div><span style="display:block;color:{_nm_clr};font-size:0.82em;font-weight:600;">{_name}</span>'
+            f'<span style="color:#4b5563;font-size:0.57em;">{_exch}</span></div>'
+            f'<div style="text-align:right;">{_price_h}</div>'
+            f'</a>'
+            f'<a href="{_del_href}" style="color:#2d3748;font-size:0.8em;padding:0 8px;'
+            f'display:flex;align-items:center;text-decoration:none;">✕</a>'
+            f'</div>'
+        )
+    _wl_rows += '</div>'
+    st.markdown(_wl_rows, unsafe_allow_html=True)
 
 
 
