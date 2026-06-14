@@ -712,7 +712,7 @@ mkt_text  = "LIVE" if mkt_open else "CLOSED"
 # ── Watchlist + live Kite quotes (fetched once, used in both columns) ──
 saved_watchlist = get_watchlist()
 if not saved_watchlist:
-    for _d in ["NIFTY 50","BANK NIFTY","FIN NIFTY","MIDCAP SELECT","MCX CRUDE OIL","RELIANCE","HDFC BANK","TCS","INFOSYS"]:
+    for _d in ["NIFTY 50","BANK NIFTY","FIN NIFTY","MIDCAP SELECT","MCX CRUDE OIL","MCX NATURAL GAS","RELIANCE","HDFC BANK","TCS","INFOSYS"]:
         add_to_watchlist(_d)
     saved_watchlist = get_watchlist()
 
