@@ -1521,36 +1521,72 @@ function drawPivots(pvt) {{
 }}
 
 // ── Show embedded data immediately ──
-if (INIT_CANDLES.length > 0) {{ cs.setData(INIT_CANDLES); chart.timeScale().fitContent(); }}
+let lastBar = null;
+let initialLoaded = false;
+
+function applyCandles(candles, fitView) {{
+  if (!candles || candles.length === 0) return;
+  cs.setData(candles);
+  lastBar = candles[candles.length - 1];
+  if (fitView) chart.timeScale().fitContent();
+  initialLoaded = true;
+}}
+
+if (INIT_CANDLES.length > 0) applyCandles(INIT_CANDLES, true);
 if (INIT_LTP > 0) ltpLine = cs.createPriceLine({{price:INIT_LTP,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
 drawPivots(INIT_PIVOTS);
 
-// ── Live upgrades via /api/live/* (requires nginx /api/ route on server) ──
-async function apiLoadCandles() {{
-  try {{
-    const r = await fetch('/api/live/candles?key='+encodeURIComponent(SYMBOL)+'&tf='+TF, {{cache:'no-store'}});
-    if (!r.ok) return;
-    const d = await r.json();
-    if (d.candles && d.candles.length > 0) {{ cs.setData(d.candles); chart.timeScale().fitContent(); }}
-    if (d.pivots) drawPivots(d.pivots);
-  }} catch(e) {{}}
-}}
-
+// ── Live candle tick (every 1s) — updates close of current candle in real-time ──
 async function apiUpdateLTP() {{
   try {{
     const r = await fetch('/api/live/ltp?key='+encodeURIComponent(SYMBOL), {{cache:'no-store'}});
     if (!r.ok) return;
     const d = await r.json();
-    if (d.price && d.price > 0) {{
-      if (!ltpLine) ltpLine = cs.createPriceLine({{price:d.price,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
-      else ltpLine.applyOptions({{price:d.price}});
+    if (!d.price || d.price <= 0) return;
+    const ltp = d.price;
+
+    // Update the LTP price line
+    if (!ltpLine) ltpLine = cs.createPriceLine({{price:ltp,color:'#387ed1',lineWidth:1,lineStyle:1,axisLabelVisible:true,title:'LTP'}});
+    else ltpLine.applyOptions({{price:ltp}});
+
+    // Tick the last candle's close so it moves like a live chart
+    if (lastBar) {{
+      const ticked = {{
+        time:  lastBar.time,
+        open:  lastBar.open,
+        high:  Math.max(lastBar.high, ltp),
+        low:   Math.min(lastBar.low,  ltp),
+        close: ltp,
+      }};
+      cs.update(ticked);
+      lastBar = ticked;
     }}
   }} catch(e) {{}}
 }}
 
-apiLoadCandles();                         // try API on load (no-op if nginx not set up)
-setInterval(apiUpdateLTP,   1000);        // LTP every 1s via API if available
-setInterval(apiLoadCandles, 30000);       // Candles every 30s via API if available
+// ── Candle refresh (every 15s) — adds new candles, preserves zoom ──
+async function apiLoadCandles() {{
+  try {{
+    const r = await fetch('/api/live/candles?key='+encodeURIComponent(SYMBOL)+'&tf='+TF, {{cache:'no-store'}});
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.candles || d.candles.length === 0) return;
+    if (!initialLoaded) {{
+      // First successful fetch from API — replace embedded data
+      applyCandles(d.candles, true);
+    }} else {{
+      // Incremental: update only the last candle (or add a new one)
+      const apiLast = d.candles[d.candles.length - 1];
+      cs.update(apiLast);
+      lastBar = apiLast;
+    }}
+    if (d.pivots) drawPivots(d.pivots);
+  }} catch(e) {{}}
+}}
+
+apiLoadCandles();                        // fetch fresh candles immediately on load
+setInterval(apiUpdateLTP,   1000);       // tick current candle every 1s
+setInterval(apiLoadCandles, 15000);      // sync full last candle every 15s
 window.addEventListener('resize', () => chart.resize(window.innerWidth, 490));
 </script></body></html>"""
 

@@ -584,22 +584,29 @@ def live_candles(
     tf:  str = Query("5m", description="Timeframe: 1m 3m 5m 15m 1h 1D"),
 ):
     """
-    OHLCV candles + pivot levels for a symbol. Chart iframe polls this every 30s.
+    OHLCV candles + pivot levels for a symbol. Chart JS polls this every 15s.
     Returns IST-aligned UNIX timestamps for intraday, ISO date strings for daily.
     """
     kite_sym, yf_sym, is_mcx = _resolve_sym(key)
     df = pd.DataFrame()
 
-    # Try Kite historical data (uses nse symbol or index token)
-    if not is_mcx and zerodha_api.is_connected():
+    if zerodha_api.is_connected():
         try:
-            nse = SYMBOLS.get(key, {}).get("nse", key)
-            df = zerodha_api.get_historical_data(nse, tf)
+            if is_mcx:
+                # MCX: look up active futures contract first
+                mcx_commodity = SYMBOLS.get(key, {}).get("mcx", "")
+                if mcx_commodity:
+                    mcx_sym = zerodha_api.get_mcx_active_symbol(mcx_commodity)
+                    if mcx_sym:
+                        df = zerodha_api.get_historical_data(mcx_sym, tf, exchange="MCX")
+            else:
+                nse = SYMBOLS.get(key, {}).get("nse", key)
+                df = zerodha_api.get_historical_data(nse, tf)
         except Exception:
             pass
 
-    # Fallback: yfinance
-    if df is None or df.empty:
+    # Fallback: yfinance (only for non-MCX to avoid USD prices)
+    if (df is None or df.empty) and yf_sym and not is_mcx:
         _tf_yf = {"1m":("5d","1m"),"3m":("5d","2m"),"5m":("5d","5m"),"15m":("5d","15m"),"1h":("5d","60m"),"1D":("1mo","1d")}
         period, interval = _tf_yf.get(tf, ("5d","5m"))
         try:
