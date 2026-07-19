@@ -162,7 +162,7 @@ textarea { background: #12121f !important; border: 1px solid #2a2a4a !important;
 """, unsafe_allow_html=True)
 
 # ── Session state defaults ──
-for _k, _v in [("active_symbol","NIFTY 50"), ("chart_tf","5m"), ("_wl_selected",None), ("navigate_to_tab",None)]:
+for _k, _v in [("active_symbol","NIFTY 50"), ("chart_tf","5m"), ("_wl_selected",None), ("navigate_to_tab",None), ("wl_page",0)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -753,9 +753,15 @@ with left_col:
                 '<span style="color:#374151;font-size:0.52em;text-transform:uppercase;letter-spacing:1px;">WATCHLIST</span>'
                 '</div>', unsafe_allow_html=True)
 
+    _WL_PAGE_SIZE = 10
+    _wl_pages = max(1, -(-len(saved_watchlist) // _WL_PAGE_SIZE))
+    st.session_state.wl_page = min(st.session_state.wl_page, _wl_pages - 1)
+    _wl_page = st.session_state.wl_page
+    _wl_slice = saved_watchlist[_wl_page * _WL_PAGE_SIZE : (_wl_page + 1) * _WL_PAGE_SIZE]
+
     import html as _html
     rows_html = '<div style="overflow:hidden;">'
-    for wl_name in saved_watchlist:
+    for wl_name in _wl_slice:
         fn   = _html.escape(SYMBOL_SHORT.get(wl_name, ("", wl_name))[1] or wl_name)
         p    = wl_prices.get(wl_name)
         pct  = wl_changes.get(wl_name)
@@ -792,6 +798,19 @@ with left_col:
         )
     rows_html += '</div>'
     st.markdown(rows_html, unsafe_allow_html=True)
+
+    if _wl_pages > 1:
+        _wl_pp, _wl_pi, _wl_pn = st.columns([1, 2, 1])
+        with _wl_pp:
+            if st.button("‹", key="wl_page_prev", disabled=(_wl_page == 0), use_container_width=True):
+                st.session_state.wl_page -= 1
+                st.rerun()
+        with _wl_pi:
+            st.markdown(f'<div style="text-align:center;color:#6b7280;font-size:0.68em;padding-top:7px;">Page {_wl_page + 1} / {_wl_pages}</div>', unsafe_allow_html=True)
+        with _wl_pn:
+            if st.button("›", key="wl_page_next", disabled=(_wl_page >= _wl_pages - 1), use_container_width=True):
+                st.session_state.wl_page += 1
+                st.rerun()
 
     # Manual add / remove
     wl_input = st.text_input("Add", placeholder="+ IDEA  or  - COFORGE", key="wl_input", label_visibility="collapsed")
