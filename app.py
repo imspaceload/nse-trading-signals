@@ -885,6 +885,44 @@ def _get_option_rec_cached(nse_sym: str, atm_strike: int, action: str):
         return None
 
 
+@st.cache_data(ttl=300)
+def _get_ai_analysis_cached(nifty, banknifty, signal, rsi_d, macd_d, st_d, vwap_d, oi_d, news_data):
+    """Cache Claude analysis — avoids a live LLM call on every autorefresh/rerun."""
+    return analyze_market(
+        {"nifty": nifty, "banknifty": banknifty},
+        signal, rsi_d, macd_d, st_d, vwap_d, oi_d, news_data,
+    )
+
+
+@st.cache_data(ttl=20 if _mkt_open_now else 300)
+def _load_kite_profile_margins():
+    """Cache Zerodha profile+margins — avoids 2 blocking Kite calls on every rerun."""
+    try:
+        profile = zerodha_api.get_profile()
+        margins = zerodha_api.get_margins()
+        cash = (margins.get("equity", {}).get("available", {}).get("cash", 0) or
+                margins.get("equity", {}).get("available", {}).get("live_balance", 0))
+        return profile.get("user_name", "--"), profile.get("user_id", "--"), cash
+    except Exception:
+        return "--", "--", 0
+
+
+@st.cache_data(ttl=20 if _mkt_open_now else 300)
+def _load_kite_positions():
+    try:
+        return zerodha_api.get_positions().get("day", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=20 if _mkt_open_now else 300)
+def _load_kite_orders():
+    try:
+        return zerodha_api.get_orders()
+    except Exception:
+        return []
+
+
 # ══════════════════════════════════════════════
 #  CHART TAB
 # ══════════════════════════════════════════════
@@ -1765,9 +1803,9 @@ with tab_news:
             st.markdown('<div style="color:#6b7280;font-size:0.6em;text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px;">CLAUDE ANALYSIS</div>', unsafe_allow_html=True)
             with st.spinner("AI analyzing..."):
                 try:
-                    analysis_text = analyze_market(
-                        {"nifty": spot_price if active_sym.get("nse")=="NIFTY" else None,
-                         "banknifty": spot_price if active_sym.get("nse")=="BANKNIFTY" else None},
+                    analysis_text = _get_ai_analysis_cached(
+                        spot_price if active_sym.get("nse")=="NIFTY" else None,
+                        spot_price if active_sym.get("nse")=="BANKNIFTY" else None,
                         signal, rsi_d, macd_d, st_d, vwap_d, oi_d, news_data,
                     )
                 except Exception:
@@ -1781,15 +1819,7 @@ with tab_sms:
 
     st.markdown('<div style="border-bottom:1px solid #2a2a4a;margin:8px 0 12px;"></div>', unsafe_allow_html=True)
     if kite_live:
-        try:
-            profile = zerodha_api.get_profile()
-            margins = zerodha_api.get_margins()
-            cash    = (margins.get("equity",{}).get("available",{}).get("cash",0) or
-                       margins.get("equity",{}).get("available",{}).get("live_balance",0))
-            user_name = profile.get("user_name","--")
-            user_id   = profile.get("user_id","--")
-        except Exception:
-            user_name, user_id, cash = "--","--",0
+        user_name, user_id, cash = _load_kite_profile_margins()
         st.markdown(f"""
 <div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:8px;padding:11px;margin-bottom:12px;">
   <div style="color:#4caf50;font-weight:700;font-size:0.88em;margin-bottom:8px;">⚡ ZERODHA CONNECTED</div>
@@ -1813,7 +1843,7 @@ with tab_sms:
         with pos_col:
             st.markdown('<div style="color:#9ca3af;font-size:0.76em;font-weight:600;margin-bottom:5px;">Positions</div>', unsafe_allow_html=True)
             try:
-                positions = zerodha_api.get_positions().get("day",[])
+                positions = _load_kite_positions()
                 for p in (positions or [])[:6]:
                     pnl = p.get("pnl",0)
                     clr = "#4caf50" if pnl>=0 else "#ef4444"
@@ -1823,7 +1853,7 @@ with tab_sms:
         with ord_col:
             st.markdown('<div style="color:#9ca3af;font-size:0.76em;font-weight:600;margin-bottom:5px;">Orders</div>', unsafe_allow_html=True)
             try:
-                orders = zerodha_api.get_orders()
+                orders = _load_kite_orders()
                 for o in (orders or [])[-6:]:
                     s = o.get("status","")
                     sc = "#4caf50" if s=="COMPLETE" else ("#ef4444" if s=="REJECTED" else "#f59e0b")
