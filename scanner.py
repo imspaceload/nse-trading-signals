@@ -98,7 +98,7 @@ def scan_symbol(name: str, sym_info: dict):
     signal = generate_signal(rsi, macd, st_data, vwap, oi, spot)
 
     action = signal["action"]
-    print(f"  Signal: {action} | RSI={rsi['value']} | MACD={macd['signal_text']} | ST={st_data['trend']}")
+    print(f"  Signal: {action} | RSI={rsi['value']} | MACD={macd['signal']} | ST={st_data['signal']}")
 
     if action not in ("BUY", "SELL"):
         return
