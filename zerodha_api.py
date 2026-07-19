@@ -569,7 +569,7 @@ def place_order(
             quantity=quantity,
             product=prod_map.get(product.upper(), _KC.PRODUCT_MIS),
             order_type=ot_map.get(order_type.upper(), _KC.ORDER_TYPE_MARKET),
-            price=price if order_type.upper() == "LIMIT" else None,
+            price=price if order_type.upper() in ("LIMIT", "SL") else None,
             trigger_price=trigger_price if order_type.upper() in ("SL", "SL-M") else None,
             tag=tag,
         )
@@ -890,11 +890,17 @@ def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]
         q = quotes.get(ts_key, {})
         depth = q.get("depth", {})
 
+        # Kite's quote API has no previous-close OI, only today's day-high/day-low OI.
+        # Using oi - oi_day_low is always >= 0 and can never show OI unwinding, so
+        # center on today's OI range instead — lets the change swing negative too.
+        _oi_now = q.get("oi", 0)
+        _oi_mid = (q.get("oi_day_high", _oi_now) + q.get("oi_day_low", _oi_now)) / 2
+
         entry = {
             "strikePrice": strike,
             "expiryDate": expiry_fmt,
-            "openInterest": q.get("oi", 0),
-            "changeinOpenInterest": q.get("oi", 0) - q.get("oi_day_low", 0),
+            "openInterest": _oi_now,
+            "changeinOpenInterest": round(_oi_now - _oi_mid),
             "lastPrice": q.get("last_price", 0),
             "totalTradedVolume": q.get("volume", 0),
             "impliedVolatility": 0,

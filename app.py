@@ -419,6 +419,10 @@ def _load_spot_and_df(yf_sym, nse_sym, timeframe):
 def _load_option_chain(nse_sym):
     return get_option_chain_nse_direct(nse_sym)
 
+@st.cache_data(ttl=120 if _mkt_open_now else 600)
+def _load_oi_eval(nse_sym: str) -> dict:
+    return evaluate_oi(get_option_chain_data(nse_sym) if nse_sym else None)
+
 @st.cache_data(ttl=120 if _mkt_open_now else 3600)
 def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite: bool = False) -> dict:
     """
@@ -461,7 +465,7 @@ def _load_scanner_signals(symbols_tuple: tuple, timeframe: str = "5m", use_kite:
             macd_d = compute_macd(df)
             st_d   = compute_supertrend(df)
             vwap_d = compute_vwap(df)
-            sig    = generate_signal(rsi_d, macd_d, st_d, vwap_d, None, spot)
+            sig    = generate_signal(rsi_d, macd_d, st_d, vwap_d, evaluate_oi(None), spot)
             return sym_key, {
                 "spot":       round(spot, 2),
                 "rsi":        round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0,
@@ -949,8 +953,14 @@ with _chart_tab:
     # ── Symbol header + Signal box (always visible) ──
     pivots = compute_pivots(df, st.session_state.chart_tf) if data_ok else {}
     if data_ok:
-        day_chg = df["Close"].iloc[-1] - df["Open"].iloc[0]
-        day_pct = (day_chg / df["Open"].iloc[0]) * 100
+        _kq_hdr = kite_quotes.get(active_sym_key, {}) if kite_live else {}
+        if _kq_hdr.get("change") is not None and _kq_hdr.get("pct") is not None:
+            day_chg, day_pct = _kq_hdr["change"], _kq_hdr["pct"]
+        else:
+            _today_df = df[df.index.date == now_ist.date()]
+            _day_open = _today_df["Open"].iloc[0] if not _today_df.empty else df["Open"].iloc[-1]
+            day_chg = df["Close"].iloc[-1] - _day_open
+            day_pct = (day_chg / _day_open) * 100 if _day_open else 0
         chg_c = _pct_color(day_pct)
         arrow  = "▲" if day_chg >= 0 else "▼"
         disp_short = SYMBOL_SHORT.get(active_sym_key, (active_sym_key,))[0]
@@ -1696,6 +1706,7 @@ with tab_news:
             st.info("News loading... refreshes every 5 minutes.")
 
     with sent_col:
+        oi_d = _load_oi_eval(active_sym.get("nse", ""))
         sent_score = 50
         try:
             if data_ok and rsi_d and st_d and vwap_d:
