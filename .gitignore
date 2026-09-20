@@ -12,3 +12,7 @@ build/
 .claude/
 frontend/node_modules/
 frontend/.next/
+trades.json
+auto_trader_config.json
+auto_trader_positions.json
+kite_token.json

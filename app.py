@@ -18,6 +18,7 @@ if os.path.exists(_env_path):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 import zerodha_api
+import auto_trader
 
 from config import (
     SYMBOLS, STOP_LOSS_PCT, TARGET_PCT,
@@ -806,7 +807,9 @@ with left_col:
 
 
 with main_col:
-    _chart_tab, _oc_tab, _scan_tab, _picks_tab = st.tabs(["📈  Chart", "⛓  Option Chain", "📊  Scanner", "🎯  Sector Picks"])
+    _chart_tab, _oc_tab, _scan_tab, _picks_tab, _auto_tab = st.tabs(
+        ["📈  Chart", "⛓  Option Chain", "📊  Scanner", "🎯  Sector Picks", "🤖  Auto Trader"]
+    )
     # Programmatic tab navigation (triggered from Sector Picks buttons)
     _nav_to = st.session_state.get("navigate_to_tab")
     if _nav_to is not None:
@@ -1429,6 +1432,14 @@ with _scan_tab:
     with st.spinner(f"Computing signals for {len(_fo_syms)} stocks..."):
         _scan_data = _load_scanner_signals(_fo_syms, _scan_tf, use_kite=kite_live)
 
+    # Auto Trader: feed this rerun's scan into the engine (entries + averaging + exits).
+    # No-ops internally if Kite isn't connected, market is closed, or the pause toggle is on.
+    if kite_live:
+        try:
+            auto_trader.evaluate_signals(_scan_data)
+        except Exception as _at_err:
+            print(f"[auto_trader] evaluate_signals error: {_at_err}")
+
     _buys  = sum(1 for v in _scan_data.values() if v.get("signal") == "BUY")
     _sells = sum(1 for v in _scan_data.values() if v.get("signal") == "SELL")
     _holds = len(_scan_data) - _buys - _sells
@@ -1694,6 +1705,148 @@ with _picks_tab:
                     _rest_tbl += '</tr>'
                 _rest_tbl += '</tbody></table>'
                 st.markdown(_rest_tbl, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════
+#  AUTO TRADER TAB (Module A — Automated Trade Executor)
+# ══════════════════════════════════════════════
+with _auto_tab:
+    _at_cfg = auto_trader.get_config()
+
+    # Live API pull — refresh current_price/P&L for open positions on every
+    # render of this tab, independent of the Scanner tab's engine tick.
+    if zerodha_api.is_connected():
+        try:
+            auto_trader.refresh_open_position_prices()
+        except Exception as _at_refresh_err:
+            print(f"[auto_trader] price refresh error: {_at_refresh_err}")
+
+    if not zerodha_api.is_connected():
+        st.markdown('<div style="color:#f59e0b;background:#1f1a0a;border:1px solid #4d3d1e;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:0.8em;">⚠ Connect Zerodha Kite (sidebar) to enable auto-trading. Signals still scan, but no orders will be placed while disconnected.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="color:#ef4444;background:#1f0a0a;border:1px solid #4d1e1e;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:0.78em;"><b>⚠ No stop-loss by design.</b> This bot only exits on Profit Target — a losing position is never auto-closed. It averages down up to Max Averaging Rounds and then simply holds. You are responsible for monitoring open positions.</div>', unsafe_allow_html=True)
+
+    if auto_trader.past_square_off_warning_time() and auto_trader.get_positions(status="OPEN"):
+        st.markdown('<div style="color:#f59e0b;background:#1f1a0a;border:1px solid #4d3d1e;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:0.8em;">⏰ Past 3:15 PM with open positions — no auto square-off happens here. Zerodha squares off MIS around 3:20 PM per exchange rules; NRML/CNC positions stay open. Review manually.</div>', unsafe_allow_html=True)
+
+    _pause_col1, _pause_col2 = st.columns([1, 5])
+    with _pause_col1:
+        _new_paused = st.toggle("⏸ Pause Trading", value=_at_cfg["trade_paused"], key="auto_trade_pause_toggle")
+    if _new_paused != _at_cfg["trade_paused"]:
+        auto_trader.set_config(trade_paused=_new_paused)
+        st.rerun()
+    with _pause_col2:
+        _status_txt = "🔴 PAUSED — no new orders will be placed" if _new_paused else "🟢 ACTIVE — scanning for entries"
+        st.markdown(f'<div style="padding-top:8px;color:#9ca3af;font-size:0.8em;">{_status_txt}</div>', unsafe_allow_html=True)
+
+    _summary = auto_trader.get_dashboard_summary()
+    st.markdown(f"""
+<div style="display:flex;gap:6px;margin:10px 0;flex-wrap:wrap;">
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:110px;text-align:center;">
+    <div style="color:#6b7280;font-size:0.55em;text-transform:uppercase;">Total Capital</div>
+    <div style="color:#e8e8e8;font-size:1.25em;font-weight:700;">₹{_summary['total_capital']:,.0f}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:110px;text-align:center;">
+    <div style="color:#6b7280;font-size:0.55em;text-transform:uppercase;">Deployed</div>
+    <div style="color:#f59e0b;font-size:1.25em;font-weight:700;">₹{_summary['deployed']:,.0f}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:110px;text-align:center;">
+    <div style="color:#6b7280;font-size:0.55em;text-transform:uppercase;">Available {'· Kite' if _summary['available_is_live'] else '· est.'}</div>
+    <div style="color:#4caf50;font-size:1.25em;font-weight:700;">₹{_summary['available']:,.0f}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:110px;text-align:center;">
+    <div style="color:#6b7280;font-size:0.55em;text-transform:uppercase;">P&amp;L Today</div>
+    <div style="color:{'#4caf50' if _summary['pnl_today']>=0 else '#ef4444'};font-size:1.25em;font-weight:700;">₹{_summary['pnl_today']:,.0f}</div>
+  </div>
+  <div style="background:#12121f;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:110px;text-align:center;">
+    <div style="color:#6b7280;font-size:0.55em;text-transform:uppercase;">Active Trades</div>
+    <div style="color:#e8e8e8;font-size:1.25em;font-weight:700;">{_summary['open_count']}/{_summary['max_active_trades']}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    with st.expander("⚙ Configuration", expanded=False):
+        with st.form("auto_trader_config_form"):
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                _f_total_capital = st.number_input("Total Capital (₹)", min_value=1000.0, value=float(_at_cfg["total_capital"]), step=1000.0)
+                _f_max_margin_pct = st.number_input("Max Margin Per Trade (%)", min_value=1.0, max_value=100.0, value=float(_at_cfg["max_margin_pct"]), step=1.0)
+                _f_max_active = st.number_input("Max Active Trades", min_value=1, max_value=10, value=int(_at_cfg["max_active_trades"]), step=1)
+                _f_trade_mode = st.selectbox("Trade Mode", ["OPTIONS", "EQUITY"], index=0 if _at_cfg["trade_mode"] == "OPTIONS" else 1)
+            with _c2:
+                _f_profit_target = st.number_input("Profit Target (%)", min_value=0.5, max_value=100.0, value=float(_at_cfg["profit_target_pct"]), step=0.5)
+                _f_avg_drop = st.number_input("Averaging Trigger Drop (%)", min_value=0.5, max_value=50.0, value=float(_at_cfg["averaging_drop_pct"]), step=0.5)
+                _f_max_rounds = st.number_input("Max Averaging Rounds", min_value=0, max_value=10, value=int(_at_cfg["max_averaging_rounds"]), step=1)
+
+            if st.form_submit_button("💾 Save Configuration", use_container_width=True):
+                auto_trader.set_config(
+                    total_capital=_f_total_capital, max_margin_pct=_f_max_margin_pct,
+                    max_active_trades=int(_f_max_active), profit_target_pct=_f_profit_target,
+                    averaging_drop_pct=_f_avg_drop, max_averaging_rounds=int(_f_max_rounds),
+                    trade_mode=_f_trade_mode,
+                )
+                st.success("Configuration saved.")
+                st.rerun()
+
+    st.markdown('<div style="color:#e8e8e8;font-size:0.9em;font-weight:600;margin:14px 0 8px;">Positions</div>', unsafe_allow_html=True)
+
+    _open_positions = auto_trader.get_positions(status="OPEN")
+    if not _open_positions:
+        st.markdown('<div style="color:#6b7280;padding:16px;text-align:center;font-size:0.82em;">No open positions. The bot enters automatically on scanner BUY signals — keep this page open (autorefresh drives the engine tick).</div>', unsafe_allow_html=True)
+    else:
+        _hdr = st.columns([1.6, 0.7, 1, 1, 1, 0.7, 1, 0.9, 0.9, 1.1, 1.1])
+        for _h, _label in zip(_hdr, ["Symbol", "Type", "Entry", "Avg", "Current", "Qty", "P&L (₹)", "P&L (%)", "Round", "", ""]):
+            _h.markdown(f'<span style="color:#9ca3af;font-size:0.68em;text-transform:uppercase;">{_label}</span>', unsafe_allow_html=True)
+
+        for _p in _open_positions:
+            _row = st.columns([1.6, 0.7, 1, 1, 1, 0.7, 1, 0.9, 0.9, 1.1, 1.1])
+            _pnl_c = "#4caf50" if (_p.get("pnl") or 0) >= 0 else "#ef4444"
+            _row[0].markdown(f'<b style="color:#e8e8e8;">{_p["symbol"]}</b><br><span style="color:#6b7280;font-size:0.7em;">{_p["tradingsymbol"]}</span>', unsafe_allow_html=True)
+            _row[1].markdown(_p.get("option_type") or "EQ", unsafe_allow_html=True)
+            _row[2].markdown(f'₹{_p["entry_price"]:,.2f}', unsafe_allow_html=True)
+            _row[3].markdown(f'₹{_p["avg_price"]:,.2f}', unsafe_allow_html=True)
+            _row[4].markdown(f'₹{_p.get("current_price", _p["avg_price"]):,.2f}', unsafe_allow_html=True)
+            _row[5].markdown(f'{_p["total_qty"]}', unsafe_allow_html=True)
+            _row[6].markdown(f'<span style="color:{_pnl_c};font-weight:700;">₹{_p.get("pnl", 0):,.2f}</span>', unsafe_allow_html=True)
+            _row[7].markdown(f'<span style="color:{_pnl_c};font-weight:700;">{_p.get("pnl_pct", 0):+.2f}%</span>', unsafe_allow_html=True)
+            _row[8].markdown(f'{_p["rounds"]}/{_at_cfg["max_averaging_rounds"]}', unsafe_allow_html=True)
+            if _row[9].button("Exit Now", key=f"exit_{_p['id']}", use_container_width=True):
+                _res = auto_trader.exit_now(_p["id"])
+                if _res:
+                    st.success(f"Exited {_p['symbol']} @ ₹{_res['current_price']:,.2f} — P&L ₹{_res['pnl']:,.2f}")
+                else:
+                    st.error("Exit failed — check Kite order book.")
+                st.rerun()
+            _paused = _p.get("paused_averaging", False)
+            _new_paused_state = _row[10].toggle("Pause Avg", value=_paused, key=f"pauseavg_{_p['id']}")
+            if _new_paused_state != _paused:
+                auto_trader.set_averaging_paused(_p["id"], _new_paused_state)
+                st.rerun()
+
+    _closed_positions = auto_trader.get_positions(status="CLOSED")
+    if _closed_positions:
+        with st.expander(f"Closed positions ({len(_closed_positions)})"):
+            _ct = '<table style="width:100%;border-collapse:collapse;font-size:0.76em;">'
+            _ct += ('<thead><tr style="background:#1e293b;">'
+                    '<th style="padding:4px 6px;text-align:left;color:#9ca3af;">Symbol</th>'
+                    '<th style="padding:4px 6px;text-align:right;color:#9ca3af;">Avg</th>'
+                    '<th style="padding:4px 6px;text-align:right;color:#9ca3af;">Exit</th>'
+                    '<th style="padding:4px 6px;text-align:right;color:#9ca3af;">Qty</th>'
+                    '<th style="padding:4px 6px;text-align:right;color:#9ca3af;">P&amp;L</th>'
+                    '<th style="padding:4px 6px;text-align:center;color:#9ca3af;">Reason</th>'
+                    '<th style="padding:4px 6px;text-align:right;color:#9ca3af;">Closed</th></tr></thead><tbody>')
+            for _c in sorted(_closed_positions, key=lambda r: r.get("closed_at") or "", reverse=True)[:30]:
+                _pc = "#4caf50" if (_c.get("pnl") or 0) >= 0 else "#ef4444"
+                _ct += '<tr style="border-bottom:1px solid rgba(42,42,74,0.2);">'
+                _ct += f'<td style="padding:3px 6px;color:#e8e8e8;">{_c["symbol"]} <span style="color:#6b7280;">{_c.get("tradingsymbol","")}</span></td>'
+                _ct += f'<td style="padding:3px 6px;text-align:right;color:#d1d5db;">₹{_c["avg_price"]:,.2f}</td>'
+                _ct += f'<td style="padding:3px 6px;text-align:right;color:#d1d5db;">₹{_c.get("current_price",0):,.2f}</td>'
+                _ct += f'<td style="padding:3px 6px;text-align:right;color:#d1d5db;">{_c["total_qty"]}</td>'
+                _ct += f'<td style="padding:3px 6px;text-align:right;color:{_pc};font-weight:700;">₹{_c.get("pnl",0):,.2f}</td>'
+                _ct += f'<td style="padding:3px 6px;text-align:center;color:#9ca3af;">{_c.get("exit_reason","--")}</td>'
+                _ct += f'<td style="padding:3px 6px;text-align:right;color:#6b7280;">{(_c.get("closed_at") or "")[:16].replace("T"," ")}</td>'
+                _ct += '</tr>'
+            _ct += '</tbody></table>'
+            st.markdown(_ct, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════

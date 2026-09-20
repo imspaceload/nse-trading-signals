@@ -792,6 +792,69 @@ def get_fo_underlying_symbols() -> list:
     return sorted(_nfo_cache.keys())
 
 
+def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
+    """
+    Pick the nearest-expiry, nearest-ATM option contract for a stock/index.
+    Used by the auto-trader (auto_trader.py) to enter CE/PE positions off
+    scanner signals without needing a strike/expiry picked by hand.
+    Returns {"tradingsymbol","strike","type","expiry","lot_size",
+             "instrument_token","ltp"} or None if no contract / no LTP found.
+    """
+    if spot is None or spot <= 0:
+        return None
+    rows = _get_nfo_instruments(symbol)
+    if not rows:
+        return None
+    opt_type = opt_type.upper()
+    today = datetime.now(IST).date()
+
+    candidates = []
+    for r in rows:
+        if (r.get("instrument_type") or "").upper() != opt_type:
+            continue
+        try:
+            exp = datetime.strptime(r["expiry"], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if exp < today:
+            continue
+        try:
+            strike = float(r["strike"])
+        except Exception:
+            continue
+        candidates.append((exp, strike, r))
+    if not candidates:
+        return None
+
+    nearest_expiry = min(c[0] for c in candidates)
+    same_expiry = [c for c in candidates if c[0] == nearest_expiry]
+    same_expiry.sort(key=lambda c: abs(c[1] - spot))
+    exp, strike, row = same_expiry[0]
+
+    tsym = row["tradingsymbol"]
+    try:
+        lot_size = int(float(row.get("lot_size", 0)))
+        token = int(float(row.get("instrument_token", 0)))
+    except Exception:
+        return None
+    if lot_size <= 0 or not token:
+        return None
+
+    ltp = get_ltp(tsym, exchange="NFO")
+    if not ltp:
+        return None
+
+    return {
+        "tradingsymbol": tsym,
+        "strike": strike,
+        "type": opt_type,
+        "expiry": exp.isoformat(),
+        "lot_size": lot_size,
+        "instrument_token": token,
+        "ltp": ltp,
+    }
+
+
 def get_option_chain_kite(symbol_nse: str, expiry: str = None) -> Optional[dict]:
     """
     Build a full option chain for symbol_nse using Kite Connect.
