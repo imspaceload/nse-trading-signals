@@ -12,7 +12,8 @@ build/
 .claude/
 frontend/node_modules/
 frontend/.next/
-trades.json
-auto_trader_config.json
-auto_trader_positions.json
-kite_token.json
+frontend/tsconfig.tsbuildinfo
+
+# runtime state (tokens, positions, logs) — keep only the seed watchlist
+backend/data/*
+!backend/data/watchlist.json

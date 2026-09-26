@@ -1,55 +1,66 @@
 'use client';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { Quote } from '../lib/types';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+export type { Quote as QuoteData };
 
-export interface QuoteData {
-  ltp: number;
-  pct: number;
-  change: number;
+// Empty string / unset both fall back to same-origin (nginx proxies /ws) in production.
+function wsBase(): string {
+  const env = process.env.NEXT_PUBLIC_WS_URL;
+  if (env) return env;
+  if (typeof window === 'undefined') return 'ws://localhost:8000';
+  const api = process.env.NEXT_PUBLIC_API_URL;
+  if (api === undefined) return 'ws://localhost:8000';
+  return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 }
 
+export type TickerStatus = 'connecting' | 'live' | 'reconnecting';
+
+/**
+ * Live quotes over one WebSocket. Reconnects with exponential backoff (1s → 30s), ignores
+ * events from sockets that were replaced, and debounces symbol changes so editing the
+ * watchlist doesn't open a new socket per keystroke.
+ */
 export function useTicker(symbols: string[]) {
-  const [quotes, setQuotes] = useState<Record<string, QuoteData>>({});
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const symbolsKey = symbols.join(',');
-
-  const connect = useCallback(() => {
-    try {
-      const ws = new WebSocket(
-        `${WS_URL}/ws/ticker${symbolsKey ? `?symbols=${encodeURIComponent(symbolsKey)}` : ''}`
-      );
-      wsRef.current = ws;
-
-      ws.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          setQuotes(prev => ({ ...prev, ...data }));
-        } catch {
-          // ignore parse errors
-        }
-      };
-
-      ws.onclose = () => {
-        reconnectTimer.current = setTimeout(connect, 3000);
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-    } catch {
-      reconnectTimer.current = setTimeout(connect, 5000);
-    }
-  }, [symbolsKey]);
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
+  const [status, setStatus] = useState<TickerStatus>('connecting');
+  const symbolsKey = [...new Set(symbols)].sort().join(',');
+  const attempts = useRef(0);
 
   useEffect(() => {
-    connect();
-    return () => {
-      clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
+    let closedByUs = false;
+    let ws: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-  return quotes;
+    const connect = () => {
+      const socket = new WebSocket(`${wsBase()}/ws/ticker${symbolsKey ? `?symbols=${encodeURIComponent(symbolsKey)}` : ''}`);
+      ws = socket;
+
+      socket.onopen = () => { attempts.current = 0; setStatus('live'); };
+      socket.onmessage = e => {
+        if (ws !== socket) return;
+        try {
+          const data = JSON.parse(e.data) as Record<string, Quote>;
+          setQuotes(prev => ({ ...prev, ...data }));
+        } catch { /* ignore malformed frame */ }
+      };
+      socket.onclose = () => {
+        if (closedByUs || ws !== socket) return;
+        setStatus('reconnecting');
+        attempts.current += 1;
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** (attempts.current - 1), 30000));
+      };
+      socket.onerror = () => socket.close();
+    };
+
+    const startTimer = setTimeout(connect, 400); // debounce rapid symbol changes
+    return () => {
+      closedByUs = true;
+      clearTimeout(startTimer);
+      clearTimeout(retryTimer);
+      ws?.close();
+    };
+  }, [symbolsKey]);
+
+  return { quotes, status };
 }
