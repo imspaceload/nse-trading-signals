@@ -42,6 +42,23 @@ export interface NewsItem {
   sentiment?: string;
 }
 
+export interface Candle {
+  time: number; // UTC epoch seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface CandlesResponse {
+  symbol: string;
+  timeframe: string;
+  /** 'kite' = live from Zerodha, 'yahoo' = delayed fallback when logged out or not on NSE. */
+  source: 'kite' | 'yahoo';
+  candles: Candle[];
+}
+
 export interface Quote {
   ltp: number;
   pct: number;

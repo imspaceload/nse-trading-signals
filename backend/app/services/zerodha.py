@@ -518,10 +518,12 @@ def get_historical_data(
     symbol: str,
     timeframe: str = "5m",
     exchange: str = "NSE",
+    days_back: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV candles from Kite Connect.
     Returns a DataFrame with columns Open/High/Low/Close/Volume indexed by datetime.
+    days_back overrides the per-timeframe default lookback (the chart wants more history than the scanner).
     """
     kite = get_kite()
     if not kite:
@@ -540,7 +542,7 @@ def get_historical_data(
         return pd.DataFrame()
 
     interval  = _TF_TO_KITE.get(timeframe, "5minute")
-    days_back = _TF_DAYS_BACK.get(timeframe, 5)
+    days_back = days_back or _TF_DAYS_BACK.get(timeframe, 5)
     now       = datetime.now(IST)
     from_dt   = now - timedelta(days=days_back)
 

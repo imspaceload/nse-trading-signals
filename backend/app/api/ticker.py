@@ -7,6 +7,7 @@ import yfinance as yf
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.core.cache import TTLCache
+from app.core.config import SYMBOLS
 from app.services import zerodha
 from app.services.sms import get_watchlist
 
@@ -39,8 +40,8 @@ async def ws_ticker(websocket: WebSocket, symbols: str = Query(default="")):
             return {}
 
         def _fetch():
-            # app names ("BANK NIFTY") differ from Kite's tradingsymbols ("NIFTY BANK") for indices
-            alias = {s: (_KITE_INDEX_ALIASES.get(s) or s) for s in syms}
+            # app names differ from Kite's tradingsymbols: "BANK NIFTY" -> "NIFTY BANK", "HDFC BANK" -> "HDFCBANK"
+            alias = {s: (_KITE_INDEX_ALIASES.get(s) or SYMBOLS.get(s, {}).get("nse") or s) for s in syms}
             raw = zerodha.get_quotes(sorted(set(alias.values())))
             return {
                 sym: {"ltp": d.get("last_price", 0), "pct": d.get("pct", 0), "change": d.get("change", 0)}

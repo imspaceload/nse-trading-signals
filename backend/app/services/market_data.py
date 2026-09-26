@@ -1,7 +1,7 @@
 """
 Data fetcher: Kite Connect primary, NSE direct fallback (Indian IP), yfinance last resort.
 """
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -214,6 +214,48 @@ def get_intraday_data(symbol: str, period: str = "5d", interval: str = "5m") -> 
 def get_chart_data(yf_symbol: str, timeframe: str = "1D") -> pd.DataFrame:
     period, interval = _TF_YF.get(timeframe, ("1d", "5m"))
     return get_intraday_data(yf_symbol, period, interval)
+
+
+# ── Chart candles (the dashboard draws its own chart: TradingView's free widget refuses NSE symbols) ─
+
+# timeframe -> (Kite days back, yfinance period, yfinance interval). yfinance has no 3m bars: 1m is resampled.
+_CHART_TF = {
+    "1m":  (3,   "5d",  "1m"),
+    "3m":  (5,   "5d",  "1m"),
+    "5m":  (10,  "1mo", "5m"),
+    "15m": (30,  "1mo", "15m"),
+    "1h":  (90,  "3mo", "60m"),
+    "1D":  (730, "2y",  "1d"),
+}
+
+
+def _resolve_chart_symbol(name: str) -> Tuple[str, str]:
+    """App name ("HDFC BANK", "MCX CRUDE OIL", "JIOFIN") -> (Kite NSE symbol or "" if not on NSE, yfinance ticker)."""
+    from app.core.config import SYMBOLS
+    info = SYMBOLS.get(name)
+    if info:
+        return info["nse"], info["yf"]
+    return name, f"{name}.NS"
+
+
+def get_chart_candles(name: str, timeframe: str) -> Tuple[str, pd.DataFrame]:
+    """OHLCV for the chart: Kite when logged in (live, exact), else yfinance (delayed ~15 min). Returns (source, df)."""
+    from app.services import zerodha
+    days_back, period, interval = _CHART_TF[timeframe]
+    kite_sym, yf_sym = _resolve_chart_symbol(name)
+
+    if kite_sym and zerodha.is_connected():
+        df = zerodha.get_historical_data(kite_sym, timeframe, days_back=days_back)
+        if not df.empty:
+            return "kite", df
+
+    import yfinance as yf
+    df = yf.Ticker(yf_sym).history(period=period, interval=interval)
+    if not df.empty and timeframe == "3m":
+        df = df.resample("3min", label="left", closed="left").agg(
+            {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+        ).dropna(subset=["Open"])
+    return "yahoo", df
 
 
 def get_sparkline_data(yf_symbol: str, n: int = 18) -> List[float]:

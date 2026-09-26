@@ -1,5 +1,5 @@
 import type {
-  AutoTraderConfig, AutoTraderState, AutoWatchRow, Health, IndexQuotes, LogKind, LogRow,
+  AutoTraderConfig, AutoTraderState, AutoWatchRow, CandlesResponse, Health, IndexQuotes, LogKind, LogRow,
   NewsItem, OptionChainResponse, ScannerRow,
 } from './types';
 
@@ -101,6 +101,9 @@ export const api = {
     request<ScannerRow[]>(`/api/sector-picks?sector=${q(sector)}&timeframe=${q(timeframe)}`, { signal, timeoutMs: 90000 }),
   getOptionChain: (symbol: string, signal?: AbortSignal) =>
     request<OptionChainResponse>(`/api/option-chain?symbol=${q(symbol)}`, { signal, timeoutMs: 40000 }),
+  getFoSymbols: (signal?: AbortSignal) => request<string[]>('/api/fo-symbols', { signal, timeoutMs: 40000 }),
+  getCandles: (symbol: string, timeframe: string, signal?: AbortSignal) =>
+    request<CandlesResponse>(`/api/candles?symbol=${q(symbol)}&timeframe=${q(timeframe)}`, { signal, timeoutMs: 30000 }),
 
   getWatchlist: (signal?: AbortSignal) => request<string[]>('/api/watchlist', { signal }),
   addToWatchlist: (symbol: string) => request<{ success: boolean }>('/api/watchlist', { method: 'POST', body: { symbol } }),
