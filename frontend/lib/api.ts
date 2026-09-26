@@ -1,5 +1,5 @@
 import type {
-  AutoTraderConfig, AutoTraderState, AutoWatchRow, CandlesResponse, Health, IndexQuotes, LogKind, LogRow,
+  AutoTraderConfig, AutoTraderState, AutoWatchRow, CandlesResponse, ChartSignal, Health, IndexQuotes, LogKind, LogRow,
   NewsItem, OptionChainResponse, ScannerRow,
 } from './types';
 
@@ -102,6 +102,8 @@ export const api = {
   getOptionChain: (symbol: string, signal?: AbortSignal) =>
     request<OptionChainResponse>(`/api/option-chain?symbol=${q(symbol)}`, { signal, timeoutMs: 40000 }),
   getFoSymbols: (signal?: AbortSignal) => request<string[]>('/api/fo-symbols', { signal, timeoutMs: 40000 }),
+  getChartSignal: (symbol: string, signal?: AbortSignal) =>
+    request<ChartSignal>(`/api/chart-signal?symbol=${q(symbol)}`, { signal, timeoutMs: 30000 }),
   getCandles: (symbol: string, timeframe: string, signal?: AbortSignal) =>
     request<CandlesResponse>(`/api/candles?symbol=${q(symbol)}&timeframe=${q(timeframe)}`, { signal, timeoutMs: 30000 }),
 

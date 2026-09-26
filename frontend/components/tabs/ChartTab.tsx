@@ -1,14 +1,15 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import {
-  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, createChart,
-  type IChartApi, type ISeriesApi, type UTCTimestamp,
+  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineStyle, createChart,
+  type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp,
 } from 'lightweight-charts';
 import { api } from '../../lib/api';
 import { TIMEFRAMES } from '../../lib/constants';
-import { fmtPct, fmtPrice, pnlClass } from '../../lib/format';
+import { fmtLevel, fmtPct, fmtPrice, pnlClass } from '../../lib/format';
 import { usePolling } from '../../hooks/usePolling';
-import type { Quote } from '../../lib/types';
+import type { PivotKey, Quote } from '../../lib/types';
+import { SignalBox } from '../SignalBox';
 import { Empty, ErrorBox, Segmented, Skeleton, Updated } from '../ui';
 
 // lightweight-charts renders times as UTC; shift by +5:30 so the axis reads in IST.
@@ -16,6 +17,13 @@ const IST_OFFSET = 19800;
 const UP = '#4caf50';
 const DOWN = '#ef4444';
 const PX_PER_BAR = 8; // initial zoom: ~8px per candle keeps bodies readable on a phone and ~150 bars on desktop
+const PIVOT_STYLE: Record<PivotKey, { color: string; lineStyle: LineStyle }> = {
+  R2: { color: '#ef4444', lineStyle: LineStyle.Dashed },
+  R1: { color: '#f97316', lineStyle: LineStyle.Dashed },
+  PP: { color: '#fbbf24', lineStyle: LineStyle.Dotted },
+  S1: { color: '#22c55e', lineStyle: LineStyle.Dashed },
+  S2: { color: '#16a34a', lineStyle: LineStyle.Dashed },
+};
 
 // Drawn here from our own candles: TradingView's free embed widget refuses NSE symbols.
 export function ChartTab({ symbol, quote, tf, onTf, marketOpen, active }: {
@@ -26,12 +34,19 @@ export function ChartTab({ symbol, quote, tf, onTf, marketOpen, active }: {
     signal => api.getCandles(symbol, tf, signal),
     { intervalMs: marketOpen ? 15000 : null, enabled: active, resetKey: frameKey },
   );
+  // Scored on the auto-trader's own 15m candles whatever timeframe is on screen.
+  const { data: signal } = usePolling(
+    s => api.getChartSignal(symbol, s),
+    { intervalMs: marketOpen ? 30000 : null, enabled: active, resetKey: symbol },
+  );
 
   const boxRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const fittedKey = useRef<string | null>(null);
+  const pivotLines = useRef<IPriceLine[]>([]);
+  const ltpLine = useRef<IPriceLine | null>(null);
 
   useEffect(() => {
     if (!boxRef.current) return;
@@ -55,6 +70,8 @@ export function ChartTab({ symbol, quote, tf, onTf, marketOpen, active }: {
       chart.remove();
       chartRef.current = candleRef.current = volumeRef.current = null;
       fittedKey.current = null;
+      pivotLines.current = [];
+      ltpLine.current = null;
     };
   }, []);
 
@@ -80,6 +97,30 @@ export function ChartTab({ symbol, quote, tf, onTf, marketOpen, active }: {
     }
   }, [data, frameKey, tf]);
 
+  useEffect(() => {
+    const series = candleRef.current;
+    if (!series) return;
+    pivotLines.current.forEach(l => series.removePriceLine(l));
+    pivotLines.current = !signal ? [] : (Object.keys(PIVOT_STYLE) as PivotKey[])
+      .filter(k => signal.pivots[k] > 0)
+      .map(k => series.createPriceLine({ price: signal.pivots[k], title: k, lineWidth: 1, axisLabelVisible: true, ...PIVOT_STYLE[k] }));
+  }, [signal]);
+
+  // Live tick from the ticker, between candle refreshes.
+  const ltp = quote?.ltp ?? 0;
+  useEffect(() => {
+    const series = candleRef.current;
+    if (!series) return;
+    if (ltp <= 0) {
+      if (ltpLine.current) series.removePriceLine(ltpLine.current);
+      ltpLine.current = null;
+    } else if (ltpLine.current) {
+      ltpLine.current.applyOptions({ price: ltp });
+    } else {
+      ltpLine.current = series.createPriceLine({ price: ltp, title: 'LTP', color: '#387ed1', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true });
+    }
+  }, [ltp]);
+
   const empty = !loading && !error && data?.candles.length === 0;
 
   return (
@@ -103,10 +144,17 @@ export function ChartTab({ symbol, quote, tf, onTf, marketOpen, active }: {
               {data.source === 'kite' ? 'Kite' : 'Yahoo · delayed'}
             </span>
           )}
+          {signal && (
+            <span className="text-[11px] text-muted">
+              O {fmtLevel(signal.session.open)} · H {fmtLevel(signal.session.high)} · L {fmtLevel(signal.session.low)}
+            </span>
+          )}
           <Updated at={updatedAt} refreshing={refreshing} />
         </div>
         <Segmented options={TIMEFRAMES} value={tf as (typeof TIMEFRAMES)[number]} onChange={onTf} />
       </div>
+
+      {signal && <div className="shrink-0"><SignalBox s={signal} /></div>}
 
       {error && <div className="shrink-0 px-3 pt-2"><ErrorBox message={error.message} onRetry={refresh} stale={!!data} /></div>}
 

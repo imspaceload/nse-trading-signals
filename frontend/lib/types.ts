@@ -59,6 +59,31 @@ export interface CandlesResponse {
   candles: Candle[];
 }
 
+export type PivotKey = 'R2' | 'R1' | 'PP' | 'S1' | 'S2';
+
+/** The auto-trader's view of one symbol (15m score) plus previous-session pivots for the chart. */
+export interface ChartSignal {
+  symbol: string;
+  timeframe: string;
+  source: 'kite' | 'yahoo';
+  spot: number;
+  direction: Direction;
+  score: number;
+  buy_pts: number;
+  sell_pts: number;
+  rsi: number;
+  macd: string;
+  supertrend: 'BULL' | 'BEAR';
+  vwap: string;
+  vol_spike: boolean;
+  pivots: Record<PivotKey, number>;
+  levels: { T1: number; T2: number; AVG: number; SL1: number; SL2: number | null };
+  /** null when the symbol has no NSE options (commodities, SENSEX). */
+  option: { underlying: string; atm: number; ce_trigger: number; ce_strike: number; pe_trigger: number; pe_strike: number } | null;
+  session: { open: number; high: number; low: number };
+  auto_trader: { scanned: boolean; sector: string | null; min_score: number };
+}
+
 export interface Quote {
   ltp: number;
   pct: number;

@@ -899,6 +899,22 @@ def get_fo_underlying_symbols() -> list:
     return sorted(_nfo_cache.keys())
 
 
+def get_option_strikes(symbol: str) -> List[float]:
+    """Listed strikes of the nearest expiry (the one pick_atm_option trades). Empty if unknown / logged out."""
+    today = datetime.now(IST).date()
+    by_expiry: Dict = {}
+    for r in _get_nfo_instruments(symbol):
+        if (r.get("instrument_type") or "").upper() not in ("CE", "PE"):
+            continue
+        try:
+            exp = datetime.strptime(r["expiry"], "%Y-%m-%d").date()
+            if exp >= today:
+                by_expiry.setdefault(exp, set()).add(float(r["strike"]))
+        except Exception:
+            continue
+    return sorted(by_expiry[min(by_expiry)]) if by_expiry else []
+
+
 def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
     """
     Pick the nearest-expiry, nearest-ATM option contract for a stock/index.

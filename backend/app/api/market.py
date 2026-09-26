@@ -4,10 +4,12 @@ from fastapi import APIRouter, HTTPException, Query
 from app.core.cache import TTLCache
 from app.services import zerodha
 from app.core.config import SYMBOLS
+from app.services.chart_signal import get_chart_signal
 from app.services.market_data import _CHART_TF, get_chart_candles, get_nse_indices, get_option_chain_nse_direct, is_market_open
 from app.services.news import scrape_moneycontrol_news
 from app.services.scanner import SECTOR_UNIVERSE, TF_YF_MAP, run_scanner
 from app.services.sector_watchlist import SECTOR_STOCKS
+from app.trader import engine
 
 router = APIRouter(prefix="/api", tags=["market"])
 
@@ -114,6 +116,27 @@ def candles(symbol: str = Query(...), timeframe: str = Query("5m")):
         return _cache.get(("candles", symbol, timeframe), ttl=ttl, compute=_load, stale_ttl=ttl * 4)
     except Exception:
         raise HTTPException(status_code=404, detail=f"No chart data for {symbol}. Check the symbol name (NSE code, e.g. INFY).")
+
+
+@router.get("/chart-signal")
+def chart_signal(symbol: str = Query(...)):
+    """Signal box for the chart: the auto-trader's 15m score for this symbol plus previous-session pivots."""
+    symbol = symbol.strip().upper()
+    if not symbol or len(symbol) > 30:
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+
+    def _load():
+        min_score = int(engine.get_config(force_reload=True).get("min_entry_score") or 3)
+        data = get_chart_signal(symbol, min_score)
+        if not data:
+            raise RuntimeError("no data")
+        return data
+
+    ttl = 30 if is_market_open() else 600
+    try:
+        return _cache.get(("chart-signal", symbol), ttl=ttl, compute=_load, stale_ttl=ttl * 4)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"No signal data for {symbol}.")
 
 
 _FO_INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
