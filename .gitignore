@@ -12,3 +12,8 @@ build/
 .claude/
 frontend/node_modules/
 frontend/.next/
+frontend/tsconfig.tsbuildinfo
+
+# runtime state (tokens, positions, logs) — keep only the seed watchlist
+backend/data/*
+!backend/data/watchlist.json

@@ -10,14 +10,43 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Terminal palette */
+  --color-panel: #0d0d1a;
+  --color-panel-2: #141428;
+  --color-card: #12121f;
+  --color-line: #2a2a4a;
+  --color-up: #4caf50;
+  --color-down: #ef4444;
+  --color-warn: #f59e0b;
+  --color-accent: #387ed1;
+  --color-accent-soft: #60a5fa;
+  --color-muted: #6b7280;
+  --color-dim: #9ca3af;
 }
 
 html, body {
-  background: #0a0a14;
-  color: #e8e8e8;
+  background: var(--background);
+  color: var(--foreground);
   margin: 0;
   padding: 0;
   height: 100%;
   overflow: hidden;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans), 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0a0a14; }
+::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+select option { background: #12121f; }
+
+@keyframes marquee { from { transform: translateX(100vw); } to { transform: translateX(-300%); } }
+@keyframes shimmer { 0% { opacity: .35; } 50% { opacity: .7; } 100% { opacity: .35; } }
+.skeleton { background: #1a1a2e; border-radius: 6px; animation: shimmer 1.4s ease-in-out infinite; }
+
+/* Respect users who ask for less motion (the news marquee is purely decorative). */
+@media (prefers-reduced-motion: reduce) {
+  .marquee { animation: none !important; transform: none !important; }
+  .skeleton { animation: none; }
 }

@@ -1,0 +1,15 @@
+[Unit]
+Description=NSE Auto Trader worker (runs without the dashboard open)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/nse-trading-signals/backend
+EnvironmentFile=/root/nse-trading-signals/.env
+ExecStart=/root/nse-trading-signals/venv/bin/python -m app.trader.worker
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
