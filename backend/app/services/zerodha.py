@@ -12,10 +12,16 @@ import concurrent.futures
 import requests as _requests
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+import socket
 import pandas as pd
 import pytz
+import urllib3.util.connection as _urllib3_conn
 
 IST = pytz.timezone("Asia/Kolkata")
+
+# Kite only accepts orders from the whitelisted static IP. The droplet has IPv6 too,
+# and requests prefers it, so Kite sees an unregistered v6 address — force IPv4.
+_urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
 
 from app.core import config
 
@@ -898,9 +904,23 @@ def get_fo_underlying_symbols() -> list:
         _get_nfo_instruments("NIFTY")  # loads entire NFO universe into _nfo_cache
     return sorted(_nfo_cache.keys())
 
+_CASH_SETTLED = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"}
+STOCK_OPTION_ROLL_DAYS = 7
+
+
+def _tradable_expiry(symbol: str, expiries):
+    """Nearest expiry we can open fresh longs in (see STOCK_OPTION_ROLL_DAYS)."""
+    today = datetime.now(IST).date()
+    live = sorted(e for e in set(expiries) if e >= today)
+    if symbol.upper() not in _CASH_SETTLED:
+        later = [e for e in live if (e - today).days > STOCK_OPTION_ROLL_DAYS]
+        if later:
+            return later[0]
+    return live[0] if live else None
+
 
 def get_option_strikes(symbol: str) -> List[float]:
-    """Listed strikes of the nearest expiry (the one pick_atm_option trades). Empty if unknown / logged out."""
+    """Listed strikes of the expiry pick_atm_option trades. Empty if unknown / logged out."""
     today = datetime.now(IST).date()
     by_expiry: Dict = {}
     for r in _get_nfo_instruments(symbol):
@@ -912,12 +932,13 @@ def get_option_strikes(symbol: str) -> List[float]:
                 by_expiry.setdefault(exp, set()).add(float(r["strike"]))
         except Exception:
             continue
-    return sorted(by_expiry[min(by_expiry)]) if by_expiry else []
+    exp = _tradable_expiry(symbol, by_expiry)
+    return sorted(by_expiry[exp]) if exp else []
 
 
 def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
     """
-    Pick the nearest-expiry, nearest-ATM option contract for a stock/index.
+    Pick the nearest tradable expiry (_tradable_expiry), nearest-ATM option contract for a stock/index.
     Used by the auto-trader (auto_trader.py) to enter CE/PE positions off
     scanner signals without needing a strike/expiry picked by hand.
     Returns {"tradingsymbol","strike","type","expiry","lot_size",
@@ -949,8 +970,8 @@ def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
     if not candidates:
         return None
 
-    nearest_expiry = min(c[0] for c in candidates)
-    same_expiry = [c for c in candidates if c[0] == nearest_expiry]
+    target_expiry = _tradable_expiry(symbol, (c[0] for c in candidates))
+    same_expiry = [c for c in candidates if c[0] == target_expiry]
     same_expiry.sort(key=lambda c: abs(c[1] - spot))
     exp, strike, row = same_expiry[0]
 

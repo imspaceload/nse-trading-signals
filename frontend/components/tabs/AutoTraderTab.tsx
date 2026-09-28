@@ -235,6 +235,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
       {/* Configuration */}
       <Card
         title="Configuration"
+        collapsible
+        defaultOpen={false}
         right={draft && <span className="text-[10px] text-warn">Unsaved changes</span>}
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -279,7 +281,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
       </Card>
 
       {/* Closed trades */}
-      <Card title={`Recent closed trades (${s.closed.length})`}>
+      <Card title={`Recent closed trades (${s.closed.length})`} collapsible defaultOpen={false}>
         {s.closed.length === 0 ? (
           <Empty>No closed trades yet.</Empty>
         ) : (
