@@ -894,6 +894,27 @@ def read_heartbeat() -> Optional[dict]:
 SYNC_GRACE_SECONDS = 90   # don't judge a position that was just traded (Kite may lag)
 
 
+def _manual_exit_price(kite, p: dict) -> Optional[float]:
+    """Average fill price of the SELLs you placed in Kite for this position (not the bot's own
+    orders, not fills from before it was opened). None if they can't be found."""
+    own = {str(o.get("order_id")) for o in p.get("orders") or []}
+    try:
+        opened = datetime.fromisoformat(p.get("created_at") or "")
+        opened = (IST.localize(opened) if opened.tzinfo is None else opened.astimezone(IST)).replace(tzinfo=None)
+        fills = [
+            t for t in (kite.trades() or [])
+            if t.get("tradingsymbol") == p["tradingsymbol"] and t.get("exchange") == p["exchange"]
+            and t.get("transaction_type") == "SELL" and str(t.get("order_id")) not in own
+            and t.get("fill_timestamp") and t["fill_timestamp"].replace(tzinfo=None) >= opened
+        ]
+    except Exception:
+        return None
+    qty = sum(int(t.get("quantity") or 0) for t in fills)
+    if not qty:
+        return None
+    return round(sum(float(t["average_price"]) * int(t["quantity"]) for t in fills) / qty, 2)
+
+
 def reconcile_positions() -> int:
     """
     Mark OPEN positions CLOSED when Kite no longer holds them (you exited in the Kite app),
@@ -944,12 +965,15 @@ def reconcile_positions() -> int:
                 _event("EXIT", p["symbol"], f"{ts}: you sold part in Kite, qty {p['total_qty']} -> {qty}")
                 changed += 1
                 continue
-            pnl = next((float(r["pnl"]) for r in rows if isinstance(r.get("pnl"), (int, float))), None)
-            if pnl is None:
-                pnl = float(p.get("pnl") or 0)
+            # Not the Kite position row's pnl: that row sums every trade in this contract today.
+            exit_price = _manual_exit_price(kite, p)
+            if exit_price:
+                pnl = (exit_price - p["avg_price"]) * p["total_qty"]
+            else:
+                exit_price, pnl = p.get("current_price"), float(p.get("pnl") or 0)
             deployed = p["avg_price"] * p["total_qty"]
             _update_position(
-                p["id"], status="CLOSED", pnl=round(pnl, 2),
+                p["id"], status="CLOSED", pnl=round(pnl, 2), current_price=exit_price,
                 pnl_pct=round(pnl / deployed * 100, 2) if deployed else 0,
                 closed_at=now_iso, exit_reason="manual_exit", last_order_at=now_iso,
             )
