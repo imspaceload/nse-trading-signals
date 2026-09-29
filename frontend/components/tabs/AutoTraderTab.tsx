@@ -176,7 +176,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         <Stat label="Total capital" value={`₹${fmtInt(sum.total_capital)}`} />
         <Stat label="Deployed" value={`₹${fmtInt(sum.deployed)}`} />
         <Stat label={sum.available_is_live ? 'Available (live)' : 'Available (est.)'} value={`₹${fmtInt(sum.available)}`} />
-        <Stat label="P&L today" value={fmtSigned(sum.pnl_today)} tone={pnlClass(sum.pnl_today)} />
+        <Stat label={sum.pnl_is_live ? 'P&L (Zerodha)' : 'P&L today (bot)'} value={fmtSigned(sum.pnl_today)} tone={pnlClass(sum.pnl_today)} />
         <Stat label="Active trades" value={`${sum.open_count} / ${sum.max_active_trades}`} />
         <Stat label="Trades today" value={cfg.max_trades_per_day > 0 ? `${s.trades_today} / ${cfg.max_trades_per_day}` : `${s.trades_today} / ∞`} />
       </div>

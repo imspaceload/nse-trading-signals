@@ -145,6 +145,7 @@ export interface AutoSummary {
   available: number;
   available_is_live: boolean;
   pnl_today: number;
+  pnl_is_live?: boolean;
   open_count: number;
   max_active_trades: number;
 }

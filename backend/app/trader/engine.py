@@ -387,15 +387,19 @@ def get_dashboard_summary() -> dict:
     pnl_closed_today = sum(c.get("pnl", 0) or 0 for c in closed_today)
 
     total_capital = cfg["total_capital"]
-    live_cash = _available_cash() if zerodha.is_connected() else 0
+    connected = zerodha.is_connected()
+    live_cash = _available_cash() if connected else 0
     available = live_cash if live_cash else max(total_capital - deployed, 0)
+    # Kite's own figure covers manual trades too; the ledger only knows the bot's.
+    live_pnl = _account_pnl() if connected else None
 
     return {
         "total_capital": total_capital,
         "deployed": round(deployed, 2),
         "available": round(available, 2),
         "available_is_live": bool(live_cash),
-        "pnl_today": round(pnl_open + pnl_closed_today, 2),
+        "pnl_today": round(live_pnl if live_pnl is not None else pnl_open + pnl_closed_today, 2),
+        "pnl_is_live": live_pnl is not None,
         "open_count": len(open_positions),
         "max_active_trades": cfg["max_active_trades"],
     }
@@ -427,6 +431,13 @@ def _available_cash() -> float:
         return zerodha.get_available_funds()
     except Exception:
         return 0.0
+
+
+def _account_pnl() -> Optional[float]:
+    try:
+        return zerodha.get_account_pnl()
+    except Exception:
+        return None
 
 
 def _recently_ordered(pos: dict) -> bool:

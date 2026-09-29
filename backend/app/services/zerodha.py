@@ -760,6 +760,23 @@ def get_positions() -> dict:
         return {"day": [], "net": []}
 
 
+def get_account_pnl() -> Optional[float]:
+    """
+    Account-wide P&L as Kite's Positions page shows it ("Total P&L"): the sum of
+    `pnl` over net positions, so it includes trades placed outside the bot.
+    None when the call fails, so callers can fall back instead of showing 0.
+    """
+    kite = get_kite()
+    if not kite:
+        return None
+    try:
+        net = (kite.positions() or {}).get("net", []) or []
+    except Exception as e:
+        print(f"[kite-debug] positions() failed, P&L falls back to bot ledger: {e}", flush=True)
+        return None
+    return sum(float(p.get("pnl") or 0) for p in net)
+
+
 def get_orders() -> list:
     """Get all orders for the day."""
     kite = get_kite()
