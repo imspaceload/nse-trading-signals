@@ -54,6 +54,7 @@ DEDUP_SECONDS = 60  # never fire two orders for the same position within this wi
 ENTRY_CUTOFF = (15, 0)
 SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
+UNAFFORDABLE_RETRY_SECONDS = 300  # a pick too costly for the funds isn't re-tried for this long, unless funds grow
 
 DEFAULT_CONFIG = {
     "id": 1,
@@ -74,6 +75,8 @@ DEFAULT_CONFIG = {
 # Guards every read-modify-write across a single Streamlit process so two
 # concurrent sessions/reruns can't both act on the same signal/position.
 _engine_lock = threading.RLock()
+_unaffordable: Dict[str, tuple] = {}  # nse_symbol -> (time.time() when skipped, funds available then)
+_no_funds_logged_at = 0.0
 
 
 # ── Secrets / Supabase (same pattern as jobs/trades.py / services/sms.py) ─────────
@@ -455,7 +458,8 @@ def _recently_ordered(pos: dict) -> bool:
 
 # ── Entries ──────────────────────────────────────────────────────────────────
 
-def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY") -> Optional[dict]:
+def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY",
+                 available: Optional[float] = None) -> Optional[dict]:
     """direction BUY (bullish) -> buy ATM CE; SELL (bearish) -> buy ATM PE (OPTIONS mode only)."""
     if direction == "SELL" and cfg["trade_mode"] != "OPTIONS":
         return None  # equity CNC can't be shorted
@@ -464,7 +468,8 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         return None
 
     # Never size or place an order beyond the real funds in the account.
-    available = _available_cash()
+    if available is None:
+        available = _available_cash()
     if available <= 0:
         _event("SKIP", nse_symbol, "no available funds (or margin lookup failed)")
         return None
@@ -480,6 +485,7 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         lot_cost = opt["ltp"] * lot_size
         lots = int(budget // lot_cost)
         if lots < 1:
+            _unaffordable[nse_symbol] = (time.time(), available)
             mon = datetime.strptime(opt["expiry"], "%Y-%m-%d").strftime("%b").upper()
             _event("SKIP", nse_symbol, f"{nse_symbol} {mon} {opt['strike']:g}{want} "
                    f"@{opt['ltp']:g}×{lot_size}={lot_cost:.0f} > budget {budget:.0f}")
@@ -494,6 +500,7 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
             return None
         qty = int(budget // spot)
         if qty < 1:
+            _unaffordable[nse_symbol] = (time.time(), available)
             _event("SKIP", nse_symbol, f"price {spot:.0f} exceeds the budget {budget:.0f}")
             return None
         exchange, tradingsymbol, option_type = "NSE", nse_symbol, None
@@ -502,6 +509,7 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         instrument_token = zerodha.get_instrument_token(nse_symbol, "NSE")
 
     if qty * entry_price > available:
+        _unaffordable[nse_symbol] = (time.time(), available)
         _event("SKIP", nse_symbol, f"{tradingsymbol}: order cost {qty*entry_price:.0f} exceeds available funds {available:.0f}")
         return None
 
@@ -593,9 +601,30 @@ def _check_new_entries(scan_data: dict, cfg: dict):
     ]
     candidates.sort(key=lambda kv: -(kv[1].get("score") or kv[1].get("buy_count") or 0))
 
-    for sym, v in candidates[:slots]:
+    global _no_funds_logged_at
+    available = _available_cash()
+    if available <= 0:
+        if time.time() - _no_funds_logged_at >= UNAFFORDABLE_RETRY_SECONDS:
+            _no_funds_logged_at = time.time()
+            _event("SKIP", "", "no available funds (or margin lookup failed) — no new entries")
+        return
+
+    # Walk the whole ranked list: a pick the funds can't cover is skipped and the next one tried,
+    # until the free slots are filled.
+    entered = 0
+    for sym, v in candidates:
+        if entered >= slots:
+            break
+        skipped = _unaffordable.get(sym)
+        if skipped and time.time() - skipped[0] < UNAFFORDABLE_RETRY_SECONDS and available <= skipped[1]:
+            continue   # too costly a moment ago and funds haven't grown since
         try:
-            _enter_trade(sym, v["spot"], cfg, direction=v["signal"])
+            if _enter_trade(sym, v["spot"], cfg, direction=v["signal"], available=available):
+                entered += 1
+                _unaffordable.pop(sym, None)
+                available = _available_cash()   # the entry used up margin
+                if available <= 0:
+                    break
         except Exception as e:
             _event("ERROR", sym, f"entry error: {e}")
 
