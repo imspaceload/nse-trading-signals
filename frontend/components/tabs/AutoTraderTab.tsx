@@ -170,7 +170,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         <StatusPill ok={s.market_open} text={s.market_open ? 'Market open' : 'Market closed'} />
         <span className="text-[11px] text-muted">
           Product {s.rules.product} · no new entries after {s.rules.entry_cutoff} ·{' '}
-          {s.rules.product === 'MIS' || cfg.square_off_eod ? `everything sold at ${s.rules.square_off} IST` : 'positions carried overnight'}
+          {s.rules.product === 'MIS' || cfg.square_off_eod ? `auto-trades sold at ${s.rules.square_off} IST` : 'auto-trades carried overnight'}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <Updated at={updatedAt} refreshing={refreshing} />
@@ -294,10 +294,10 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
             At {s.rules.square_off} IST
             <select value={value('square_off_eod')} onChange={e => edit('square_off_eod', e.target.value)}
               className="mt-1 w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none">
-              <option value="true">Sell everything (square off)</option>
-              <option value="false">Hold NRML / CNC overnight</option>
+              <option value="true">Sell the auto-trader&apos;s open trades</option>
+              <option value="false">Hold the auto-trader&apos;s NRML / CNC trades overnight</option>
             </select>
-            <span className="text-[10px] text-muted">MIS positions are always squared off</span>
+            <span className="text-[10px] text-muted">Only trades the bot opened — your manual Kite trades are never touched. MIS trades are always sold.</span>
           </label>
         </div>
         {formError && <div className="mt-3"><ErrorBox message={formError} /></div>}

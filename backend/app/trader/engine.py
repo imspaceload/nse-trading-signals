@@ -50,8 +50,9 @@ POSITIONS_FILE = data_path("auto_trader_positions.json")
 
 DEDUP_SECONDS = 60  # never fire two orders for the same position within this window
 # Orders use the configured product (NRML for options / CNC for equity by default, or MIS). No new
-# entries after ENTRY_CUTOFF; at SQUARE_OFF_TIME the bot sells every MIS position (before Zerodha's own
-# ~3:20 PM auto square-off, which charges a fee), and NRML/CNC ones too while `square_off_eod` is on.
+# entries after ENTRY_CUTOFF; at SQUARE_OFF_TIME the bot sells its own MIS positions (before Zerodha's own
+# ~3:20 PM auto square-off, which charges a fee), and its NRML/CNC ones too while `square_off_eod` is on.
+# Only positions in the bot's own ledger are ever sold — manual Kite trades are never touched.
 ENTRY_CUTOFF = (15, 0)
 SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
