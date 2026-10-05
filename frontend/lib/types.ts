@@ -115,6 +115,11 @@ export interface AutoTraderConfig {
   min_entry_score: number;
   stop_loss_pct: number;
   stop_loss_action: 'EXIT' | 'AVERAGE';
+  lots_per_trade: number;
+  product: 'NRML' | 'MIS';
+  square_off_eod: boolean;
+  max_vwap_distance_pct: number;
+  max_day_move_pct: number;
 }
 
 export interface AutoPosition {
@@ -159,7 +164,7 @@ export interface AutoTraderState {
   market_open: boolean;
   kite_connected: boolean;
   trades_today: number;
-  rules: { entry_cutoff: string; square_off: string; exit_cooldown_seconds: number };
+  rules: { entry_cutoff: string; square_off: string; exit_cooldown_seconds: number; product: 'NRML' | 'CNC' | 'MIS' };
   warnings: string[];
 }
 
@@ -182,5 +187,7 @@ export interface AutoWatchRow {
   sector: string;
   rsi: number;
   day_pct: number;
+  vwap_dist_pct: number | null;
   eligible: boolean;
+  blocked: string | null;
 }

@@ -49,8 +49,9 @@ CONFIG_FILE = data_path("auto_trader_config.json")
 POSITIONS_FILE = data_path("auto_trader_positions.json")
 
 DEDUP_SECONDS = 60  # never fire two orders for the same position within this window
-# Intraday only: every order is MIS. No new entries after ENTRY_CUTOFF; anything still open at
-# SQUARE_OFF_TIME is sold by the bot (before Zerodha's own ~3:20 PM auto square-off, which charges a fee).
+# Orders use the configured product (NRML for options / CNC for equity by default, or MIS). No new
+# entries after ENTRY_CUTOFF; at SQUARE_OFF_TIME the bot sells every MIS position (before Zerodha's own
+# ~3:20 PM auto square-off, which charges a fee), and NRML/CNC ones too while `square_off_eod` is on.
 ENTRY_CUTOFF = (15, 0)
 SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
@@ -69,7 +70,12 @@ DEFAULT_CONFIG = {
     "trade_paused": False,
     "min_entry_score": 3,
     "stop_loss_pct": 10.0,         # loss % vs avg price that triggers the stop-loss action (0 = disabled)
-    "stop_loss_action": "EXIT",    # EXIT = sell everything | AVERAGE = add one more lot (exit once rounds/margin run out)          # min indicators (of 5) agreeing before a watchlist stock is traded
+    "stop_loss_action": "EXIT",    # EXIT = sell everything | AVERAGE = add one more lot (exit once rounds/margin run out)
+    "lots_per_trade": 1,           # option lots bought per entry / averaging round; 0 = as many as the budget allows
+    "product": "NRML",             # NRML = NRML (options) / CNC (equity), carry-forward | MIS = intraday
+    "square_off_eod": True,        # sell NRML/CNC positions at SQUARE_OFF_TIME too (MIS always is)
+    "max_vwap_distance_pct": 1.0,  # skip a pick already this far above (BUY) / below (SELL) today's VWAP; 0 = off
+    "max_day_move_pct": 3.0,       # skip a pick already up (BUY) / down (SELL) this much on the day; 0 = off
 }
 
 # Guards every read-modify-write across a single Streamlit process so two
@@ -77,6 +83,7 @@ DEFAULT_CONFIG = {
 _engine_lock = threading.RLock()
 _unaffordable: Dict[str, tuple] = {}  # nse_symbol -> (time.time() when skipped, funds available then)
 _no_funds_logged_at = 0.0
+_chase_logged_at: Dict[str, float] = {}  # nse_symbol -> last "not chased" log time (the numbers change every scan)
 
 
 # ── Secrets / Supabase (same pattern as jobs/trades.py / services/sms.py) ─────────
@@ -413,12 +420,38 @@ def _hm() -> tuple:
     return (n.hour, n.minute)
 
 
+def _product_kind(cfg: dict, trade_mode: str) -> str:
+    """Kite product for a new entry: MIS, or the carry-forward product of the instrument type."""
+    if str(cfg.get("product") or "NRML").upper() == "MIS":
+        return "MIS"
+    return "NRML" if trade_mode == "OPTIONS" else "CNC"
+
+
 def _product_for(pos: dict) -> str:
-    """MIS for today's trades. Positions opened on an earlier day (before intraday-only) keep their old product."""
+    """The product the position was bought with (kept on its first order). Older rows without it:
+    MIS if opened today (the intraday-only era), else NRML/CNC from before that."""
+    first = (pos.get("orders") or [{}])[0]
+    if isinstance(first, dict) and first.get("product"):
+        return first["product"]
     created = str(pos.get("created_at") or "")[:10]
     if created and created < datetime.now(IST).date().isoformat():
         return "NRML" if pos.get("trade_mode") == "OPTIONS" else "CNC"
     return "MIS"
+
+
+def entry_block_reason(signal: str, v: dict, cfg: dict) -> Optional[str]:
+    """Why a pick should NOT be entered because price has already run (None = fine to enter).
+    BUY: blocked when it is already far above today's VWAP or up a lot on the day; SELL mirrored."""
+    sign = 1 if signal == "BUY" else -1
+    max_vwap = float(cfg.get("max_vwap_distance_pct") or 0)
+    dist = v.get("vwap_dist_pct")
+    if max_vwap > 0 and dist is not None and sign * dist > max_vwap:
+        return f"already {abs(dist):.2f}% {'above' if sign > 0 else 'below'} VWAP (limit {max_vwap:g}%)"
+    max_move = float(cfg.get("max_day_move_pct") or 0)
+    move = v.get("day_pct")
+    if max_move > 0 and move is not None and sign * move > max_move:
+        return f"already {move:+.2f}% on the day (limit {max_move:g}%)"
+    return None
 
 
 def past_square_off_warning_time() -> bool:
@@ -483,16 +516,16 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
             return None
         lot_size = opt["lot_size"]
         lot_cost = opt["ltp"] * lot_size
-        lots = int(budget // lot_cost)
-        if lots < 1:
+        want_lots = int(cfg.get("lots_per_trade") or 0)
+        lots = want_lots if want_lots > 0 else int(budget // lot_cost)
+        if lots < 1 or lots * lot_cost > budget:
             _unaffordable[nse_symbol] = (time.time(), available)
             mon = datetime.strptime(opt["expiry"], "%Y-%m-%d").strftime("%b").upper()
             _event("SKIP", nse_symbol, f"{nse_symbol} {mon} {opt['strike']:g}{want} "
-                   f"@{opt['ltp']:g}×{lot_size}={lot_cost:.0f} > budget {budget:.0f}")
+                   f"@{opt['ltp']:g}×{lot_size}×{max(lots, 1)} lot(s)={max(lots, 1) * lot_cost:.0f} > budget {budget:.0f}")
             return None
         qty = lots * lot_size
         exchange, tradingsymbol, option_type = "NFO", opt["tradingsymbol"], want
-        product = "MIS"
         entry_price = opt["ltp"]
         instrument_token = opt["instrument_token"]
     else:
@@ -504,7 +537,6 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
             _event("SKIP", nse_symbol, f"price {spot:.0f} exceeds the budget {budget:.0f}")
             return None
         exchange, tradingsymbol, option_type = "NSE", nse_symbol, None
-        product = "MIS"
         entry_price = spot
         instrument_token = zerodha.get_instrument_token(nse_symbol, "NSE")
 
@@ -513,6 +545,7 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         _event("SKIP", nse_symbol, f"{tradingsymbol}: order cost {qty*entry_price:.0f} exceeds available funds {available:.0f}")
         return None
 
+    product = _product_kind(cfg, cfg["trade_mode"])
     order = zerodha.place_and_confirm(
         symbol=tradingsymbol, exchange=exchange, transaction_type="BUY",
         quantity=qty, order_type="MARKET", product=product, tag="auto_trader",
@@ -545,14 +578,14 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         "pnl_pct": 0.0,
         "orders": [{
             "order_id": order["order_id"], "side": "BUY", "qty": qty,
-            "price": round(entry_price, 2), "round": 1, "at": now_iso,
+            "price": round(entry_price, 2), "round": 1, "at": now_iso, "product": product,
         }],
         "created_at": now_iso,
         "closed_at": None,
         "exit_reason": None,
     }
     _create_position(pos)
-    _event("ENTERED", nse_symbol, f"{tradingsymbol} x{qty} @ {entry_price} (cost {qty * entry_price:.0f}, funds were {available:.0f})")
+    _event("ENTERED", nse_symbol, f"{tradingsymbol} x{qty} {product} @ {entry_price} (cost {qty * entry_price:.0f}, funds were {available:.0f})")
     return pos
 
 
@@ -618,6 +651,12 @@ def _check_new_entries(scan_data: dict, cfg: dict):
         skipped = _unaffordable.get(sym)
         if skipped and time.time() - skipped[0] < UNAFFORDABLE_RETRY_SECONDS and available <= skipped[1]:
             continue   # too costly a moment ago and funds haven't grown since
+        late = entry_block_reason(v["signal"], v, cfg)
+        if late:
+            if time.time() - _chase_logged_at.get(sym, 0) >= UNAFFORDABLE_RETRY_SECONDS:
+                _chase_logged_at[sym] = time.time()
+                _event("SKIP", sym, f"{v['signal']} not chased: {late}")
+            continue
         try:
             if _enter_trade(sym, v["spot"], cfg, direction=v["signal"], available=available):
                 entered += 1
@@ -775,8 +814,8 @@ def _check_exits_and_averaging(cfg: dict):
             _persist_price(p, cur, pnl, pnl_pct)
             continue
 
-        # Intraday: flat by the square-off time, whatever the P&L
-        if _hm() >= SQUARE_OFF_TIME:
+        # Flat by the square-off time, whatever the P&L: always for MIS, for NRML/CNC while square_off_eod is on
+        if _hm() >= SQUARE_OFF_TIME and (_product_for(p) == "MIS" or cfg.get("square_off_eod", True)):
             _exit_position(p, cur, reason="intraday_squareoff")
             continue
 

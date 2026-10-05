@@ -10,7 +10,8 @@ import { useToast } from '../Toast';
 // ── Config form definition ──────────────────────────────────────────────────
 
 type NumKey = 'total_capital' | 'max_margin_pct' | 'max_active_trades' | 'max_trades_per_day' | 'profit_target_pct'
-  | 'averaging_drop_pct' | 'max_averaging_rounds' | 'stop_loss_pct' | 'min_entry_score';
+  | 'averaging_drop_pct' | 'max_averaging_rounds' | 'stop_loss_pct' | 'min_entry_score'
+  | 'lots_per_trade' | 'max_vwap_distance_pct' | 'max_day_move_pct';
 
 const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max: number; step: number; int?: boolean }[] = [
   { key: 'total_capital', label: 'Total capital (₹)', min: 100, max: 1e9, step: 1000 },
@@ -22,9 +23,13 @@ const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max:
   { key: 'averaging_drop_pct', label: 'Averaging trigger drop (%)', min: 0.5, max: 50, step: 0.5 },
   { key: 'max_averaging_rounds', label: 'Max averaging rounds', min: 0, max: 10, step: 1, int: true },
   { key: 'min_entry_score', label: 'Min signal score (of 5)', min: 1, max: 5, step: 1, int: true },
+  { key: 'lots_per_trade', label: 'Lots per trade (options)', hint: 'Per entry & averaging round · 0 = as many as the cap allows', min: 0, max: 100, step: 1, int: true },
+  { key: 'max_vwap_distance_pct', label: 'Max distance from VWAP (%)', hint: "Don't buy CE this far above / PE this far below today's VWAP · 0 = off", min: 0, max: 20, step: 0.25 },
+  { key: 'max_day_move_pct', label: 'Max day move (%)', hint: "Don't enter if already up (CE) / down (PE) this much today · 0 = off", min: 0, max: 20, step: 0.5 },
 ];
 
-type Draft = Partial<Record<NumKey | 'trade_mode' | 'stop_loss_action', string>>;
+type SelectKey = 'trade_mode' | 'stop_loss_action' | 'product' | 'square_off_eod';
+type Draft = Partial<Record<NumKey | SelectKey, string>>;
 
 function buildChanges(cfg: AutoTraderConfig, draft: Draft): { changes: Partial<AutoTraderConfig>; problem: string | null } {
   const changes: Record<string, number | string> = {};
@@ -39,7 +44,10 @@ function buildChanges(cfg: AutoTraderConfig, draft: Draft): { changes: Partial<A
   }
   if (draft.trade_mode !== undefined && draft.trade_mode !== cfg.trade_mode) changes.trade_mode = draft.trade_mode;
   if (draft.stop_loss_action !== undefined && draft.stop_loss_action !== cfg.stop_loss_action) changes.stop_loss_action = draft.stop_loss_action;
-  return { changes: changes as Partial<AutoTraderConfig>, problem: null };
+  if (draft.product !== undefined && draft.product !== cfg.product) changes.product = draft.product;
+  const out = changes as Partial<AutoTraderConfig>;
+  if (draft.square_off_eod !== undefined && (draft.square_off_eod === 'true') !== cfg.square_off_eod) out.square_off_eod = draft.square_off_eod === 'true';
+  return { changes: out, problem: null };
 }
 
 // ── Small pieces ────────────────────────────────────────────────────────────
@@ -106,8 +114,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
 
   const s: AutoTraderState = data;
   const cfg = s.config;
-  const value = (k: NumKey | 'trade_mode' | 'stop_loss_action') => draft?.[k] ?? String(cfg[k]);
-  const edit = (k: NumKey | 'trade_mode' | 'stop_loss_action', v: string) => {
+  const value = (k: NumKey | SelectKey) => draft?.[k] ?? String(cfg[k]);
+  const edit = (k: NumKey | SelectKey, v: string) => {
     setFormError(null);
     setDraft(prev => ({ ...(prev ?? {}), [k]: v }));
   };
@@ -161,7 +169,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         <StatusPill ok={s.kite_connected} text={s.kite_connected ? 'Zerodha connected' : 'Zerodha logged out'} />
         <StatusPill ok={s.market_open} text={s.market_open ? 'Market open' : 'Market closed'} />
         <span className="text-[11px] text-muted">
-          Intraday only (MIS) · no new entries after {s.rules.entry_cutoff} · everything sold at {s.rules.square_off} IST
+          Product {s.rules.product} · no new entries after {s.rules.entry_cutoff} ·{' '}
+          {s.rules.product === 'MIS' || cfg.square_off_eod ? `everything sold at ${s.rules.square_off} IST` : 'positions carried overnight'}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <Updated at={updatedAt} refreshing={refreshing} />
@@ -272,6 +281,24 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
               <option value="AVERAGE">Add one more lot (average)</option>
             </select>
           </label>
+          <label className="block text-[11px] text-dim">
+            Order product
+            <select value={value('product')} onChange={e => edit('product', e.target.value)}
+              className="mt-1 w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none">
+              <option value="NRML">NRML / CNC (carry-forward)</option>
+              <option value="MIS">MIS (intraday)</option>
+            </select>
+            <span className="text-[10px] text-muted">NRML for options, CNC for equity</span>
+          </label>
+          <label className="block text-[11px] text-dim">
+            At {s.rules.square_off} IST
+            <select value={value('square_off_eod')} onChange={e => edit('square_off_eod', e.target.value)}
+              className="mt-1 w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none">
+              <option value="true">Sell everything (square off)</option>
+              <option value="false">Hold NRML / CNC overnight</option>
+            </select>
+            <span className="text-[10px] text-muted">MIS positions are always squared off</span>
+          </label>
         </div>
         {formError && <div className="mt-3"><ErrorBox message={formError} /></div>}
         <div className="mt-3 flex gap-2">
@@ -322,7 +349,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         {!showWatch ? (
           <p className="text-xs text-muted">
             Top 4 stocks per sector with a clear bullish/bearish signal (15m). Bullish → buys the ATM CE, bearish → the ATM PE.
-            Only stocks scoring ≥ {cfg.min_entry_score}/5 are traded. Click Show to load.
+            Only stocks scoring ≥ {cfg.min_entry_score}/5 that haven&apos;t already run away from today&apos;s VWAP are traded. Click Show to load.
           </p>
         ) : watch.loading ? (
           <SkeletonRows rows={6} />
@@ -333,7 +360,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 bg-card">
                 <tr className="border-b border-line text-muted">
-                  {['Stock', 'Sector', 'Price', 'Day %', 'Score', 'Bias', 'Trade'].map(h => <th key={h} className="px-2 py-1.5 text-left">{h}</th>)}
+                  {['Stock', 'Sector', 'Price', 'Day %', 'vs VWAP', 'Score', 'Bias', 'Trade'].map(h => <th key={h} className="px-2 py-1.5 text-left">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -343,9 +370,10 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
                     <td className="px-2 py-1.5 text-dim">{w.sector}</td>
                     <td className="px-2 py-1.5">₹{fmtPrice(w.spot)}</td>
                     <td className={`px-2 py-1.5 ${pnlClass(w.day_pct)}`}>{fmtPct(w.day_pct)}</td>
+                    <td className="px-2 py-1.5 text-dim">{w.vwap_dist_pct == null ? '—' : fmtPct(w.vwap_dist_pct)}</td>
                     <td className="px-2 py-1.5 text-warn">{w.score}/5</td>
                     <td className="px-2 py-1.5"><DirBadge dir={w.signal} /></td>
-                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : `Below min score`}</td>
+                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : w.blocked ? `Too late: ${w.blocked}` : `Below min score`}</td>
                   </tr>
                 ))}
               </tbody>

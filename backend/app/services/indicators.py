@@ -117,6 +117,30 @@ def compute_vwap(df: pd.DataFrame) -> dict:
     return {"value": vwap_value, "current_price": current_price, "signal": signal, "series": vwap_series}
 
 
+def session_stats(df: pd.DataFrame) -> dict:
+    """How far price has already moved TODAY (intraday candles, several days of history):
+    day_pct = change vs the previous day's last close (or today's open if there's no earlier day),
+    vwap_dist_pct = distance from today's session VWAP (+ above / - below)."""
+    out = {"day_pct": 0.0, "vwap_dist_pct": 0.0}
+    try:
+        dates = pd.Index(df.index.date)
+        last_day = dates[-1]
+        today = df[dates == last_day]
+        earlier = df[dates < last_day]
+        spot = float(df["Close"].iloc[-1])
+        ref = float(earlier["Close"].iloc[-1]) if not earlier.empty else float(today["Open"].iloc[0])
+        if ref:
+            out["day_pct"] = round((spot - ref) / ref * 100, 2)
+        typical = (today["High"] + today["Low"] + today["Close"]) / 3
+        vol = float(today["Volume"].sum())
+        if vol > 0:
+            vwap = float((typical * today["Volume"]).sum()) / vol
+            out["vwap_dist_pct"] = round((spot - vwap) / vwap * 100, 2)
+    except Exception:
+        pass
+    return out
+
+
 def evaluate_oi(oi_data: Optional[dict]) -> dict:
     if not oi_data:
         return {"signal": "NEUTRAL", "pcr": 0, "net_oi_change": 0}

@@ -7,7 +7,7 @@ import concurrent.futures
 import pandas as pd
 
 from app.services import zerodha
-from app.services.indicators import compute_rsi, compute_macd, compute_supertrend, compute_vwap
+from app.services.indicators import compute_rsi, compute_macd, compute_supertrend, compute_vwap, session_stats
 
 # NSE F&O stocks grouped by sector (trading symbols)
 SECTOR_STOCKS = {
@@ -93,10 +93,7 @@ def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use
 
             max_score = max(buy_pts, sell_pts)
             direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
-            try:
-                day_pct = round((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100, 2)
-            except Exception:
-                day_pct = 0.0
+            sess = session_stats(df)
             rsi_val = round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0
             return nse_sym, {
                 "spot": round(spot, 2),
@@ -104,7 +101,8 @@ def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use
                 "score": max_score, "direction": direction,
                 "rsi": rsi_val, "macd": macd_sig,
                 "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
-                "vwap": vwap_sig, "vol_spike": vol_spike, "day_pct": day_pct,
+                "vwap": vwap_sig, "vol_spike": vol_spike,
+                "day_pct": sess["day_pct"], "vwap_dist_pct": sess["vwap_dist_pct"],
             }
         except Exception:
             return nse_sym, None
@@ -129,7 +127,7 @@ def build_watchlist(timeframe: str = "15m", use_kite: bool = False, per_sector: 
     """
     Top `per_sector` stocks of every sector (11 sectors x 4 = ~44), keeping only
     clear BULLISH (BUY) or BEARISH (SELL) picks.
-    Returns {nse_symbol: {"signal","spot","score","sector","rsi","day_pct"}}.
+    Returns {nse_symbol: {"signal","spot","score","sector","rsi","day_pct","vwap_dist_pct"}}.
     Pass `signals` to reuse an already-computed compute_sector_signals() result.
     """
     data = signals if signals is not None else compute_sector_signals(SECTOR_UNIVERSE, timeframe, use_kite=use_kite)
@@ -145,5 +143,6 @@ def build_watchlist(timeframe: str = "15m", use_kite: bool = False, per_sector: 
                 picks[sym] = {
                     "signal": v["direction"], "spot": v["spot"], "score": v["score"],
                     "sector": sector, "rsi": v["rsi"], "day_pct": v["day_pct"],
+                    "vwap_dist_pct": v["vwap_dist_pct"],
                 }
     return picks
