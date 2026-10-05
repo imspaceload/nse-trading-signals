@@ -118,8 +118,6 @@ export interface AutoTraderConfig {
   lots_per_trade: number;
   product: 'NRML' | 'MIS';
   square_off_eod: boolean;
-  max_vwap_distance_pct: number;
-  max_day_move_pct: number;
 }
 
 export interface AutoPosition {
@@ -187,7 +185,6 @@ export interface AutoWatchRow {
   sector: string;
   rsi: number;
   day_pct: number;
-  vwap_dist_pct: number | null;
+  fresh: boolean;
   eligible: boolean;
-  blocked: string | null;
 }

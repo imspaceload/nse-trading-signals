@@ -45,8 +45,6 @@ class ConfigUpdate(BaseModel):
     lots_per_trade: Optional[int] = Field(None, ge=0, le=100)
     product: Optional[Literal["NRML", "MIS"]] = None
     square_off_eod: Optional[bool] = None
-    max_vwap_distance_pct: Optional[float] = Field(None, ge=0, le=20)
-    max_day_move_pct: Optional[float] = Field(None, ge=0, le=20)
 
 
 class PauseBody(BaseModel):
@@ -196,12 +194,11 @@ def get_logs(
 
 
 def _build_watch() -> List[dict]:
-    cfg = engine.get_config(force_reload=True)
+    cfg = engine.get_config()
     min_score = int(cfg.get("min_entry_score") or 3)
     picks = build_watchlist("15m", use_kite=zerodha.is_connected())
     rows = []
     for sym, v in picks.items():
-        late = engine.entry_block_reason(v["signal"], v, cfg)
         rows.append({
             "symbol": sym,
             "signal": v["signal"],
@@ -211,9 +208,8 @@ def _build_watch() -> List[dict]:
             "sector": v["sector"],
             "rsi": v["rsi"],
             "day_pct": v["day_pct"],
-            "vwap_dist_pct": v.get("vwap_dist_pct"),
-            "eligible": v["score"] >= min_score and not late,
-            "blocked": late,
+            "fresh": engine.is_fresh_signal(v, min_score),
+            "eligible": v["score"] >= min_score and engine.is_fresh_signal(v, min_score),
         })
     rows.sort(key=lambda r: (-r["score"], r["symbol"]))
     return rows

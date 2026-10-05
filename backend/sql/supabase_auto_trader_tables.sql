@@ -18,9 +18,7 @@ CREATE TABLE IF NOT EXISTS auto_trader_config (
     stop_loss_action TEXT DEFAULT 'EXIT',
     lots_per_trade INTEGER DEFAULT 1,
     product TEXT DEFAULT 'NRML',
-    square_off_eod BOOLEAN DEFAULT TRUE,
-    max_vwap_distance_pct REAL DEFAULT 1,
-    max_day_move_pct REAL DEFAULT 3
+    square_off_eod BOOLEAN DEFAULT TRUE
 );
 
 -- Existing installs: add the newer column
@@ -31,8 +29,6 @@ ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS stop_loss_action TEXT DE
 ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS lots_per_trade INTEGER DEFAULT 1;
 ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS product TEXT DEFAULT 'NRML';
 ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS square_off_eod BOOLEAN DEFAULT TRUE;
-ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS max_vwap_distance_pct REAL DEFAULT 1;
-ALTER TABLE auto_trader_config ADD COLUMN IF NOT EXISTS max_day_move_pct REAL DEFAULT 3;
 
 -- Positions (open + closed) managed by the auto-trader engine
 CREATE TABLE IF NOT EXISTS auto_trader_positions (

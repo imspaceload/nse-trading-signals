@@ -56,6 +56,7 @@ DEDUP_SECONDS = 60  # never fire two orders for the same position within this wi
 ENTRY_CUTOFF = (15, 0)
 SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
+FRESH_SIGNAL_BARS = 2  # enter only if the signal fired on the forming 15m candle or the one just closed
 UNAFFORDABLE_RETRY_SECONDS = 300  # a pick too costly for the funds isn't re-tried for this long, unless funds grow
 
 DEFAULT_CONFIG = {
@@ -75,8 +76,6 @@ DEFAULT_CONFIG = {
     "lots_per_trade": 1,           # option lots bought per entry / averaging round; 0 = as many as the budget allows
     "product": "NRML",             # NRML = NRML (options) / CNC (equity), carry-forward | MIS = intraday
     "square_off_eod": True,        # sell NRML/CNC positions at SQUARE_OFF_TIME too (MIS always is)
-    "max_vwap_distance_pct": 1.0,  # skip a pick already this far above (BUY) / below (SELL) today's VWAP; 0 = off
-    "max_day_move_pct": 3.0,       # skip a pick already up (BUY) / down (SELL) this much on the day; 0 = off
 }
 
 # Guards every read-modify-write across a single Streamlit process so two
@@ -84,7 +83,6 @@ DEFAULT_CONFIG = {
 _engine_lock = threading.RLock()
 _unaffordable: Dict[str, tuple] = {}  # nse_symbol -> (time.time() when skipped, funds available then)
 _no_funds_logged_at = 0.0
-_chase_logged_at: Dict[str, float] = {}  # nse_symbol -> last "not chased" log time (the numbers change every scan)
 
 
 # ── Secrets / Supabase (same pattern as jobs/trades.py / services/sms.py) ─────────
@@ -440,19 +438,21 @@ def _product_for(pos: dict) -> str:
     return "MIS"
 
 
-def entry_block_reason(signal: str, v: dict, cfg: dict) -> Optional[str]:
-    """Why a pick should NOT be entered because price has already run (None = fine to enter).
-    BUY: blocked when it is already far above today's VWAP or up a lot on the day; SELL mirrored."""
-    sign = 1 if signal == "BUY" else -1
-    max_vwap = float(cfg.get("max_vwap_distance_pct") or 0)
-    dist = v.get("vwap_dist_pct")
-    if max_vwap > 0 and dist is not None and sign * dist > max_vwap:
-        return f"already {abs(dist):.2f}% {'above' if sign > 0 else 'below'} VWAP (limit {max_vwap:g}%)"
-    max_move = float(cfg.get("max_day_move_pct") or 0)
-    move = v.get("day_pct")
-    if max_move > 0 and move is not None and sign * move > max_move:
-        return f"already {move:+.2f}% on the day (limit {max_move:g}%)"
-    return None
+def signal_age(v: dict, min_score: int) -> int:
+    """How many candles BEFORE the current one already had this signal at >= min_score
+    (0 = it fired on the candle forming now). Capped at the history the watchlist scored."""
+    age = 0
+    for prev in v.get("prev_scores") or []:
+        if prev < min_score:
+            break
+        age += 1
+    return age
+
+
+def is_fresh_signal(v: dict, min_score: int) -> bool:
+    """A signal that has held for longer than FRESH_SIGNAL_BARS candles has already moved the price:
+    entering then buys the top (CE) / bottom (PE), so only fresh signals are traded."""
+    return signal_age(v, min_score) < FRESH_SIGNAL_BARS
 
 
 def past_square_off_warning_time() -> bool:
@@ -649,15 +649,13 @@ def _check_new_entries(scan_data: dict, cfg: dict):
     for sym, v in candidates:
         if entered >= slots:
             break
+        if not is_fresh_signal(v, min_score):   # identical SKIP lines are logged once per 10 min
+            _event("SKIP", sym, f"{v['signal']} signal is older than {FRESH_SIGNAL_BARS * 15} min — "
+                   "price has already moved, waiting for a fresh signal")
+            continue
         skipped = _unaffordable.get(sym)
         if skipped and time.time() - skipped[0] < UNAFFORDABLE_RETRY_SECONDS and available <= skipped[1]:
             continue   # too costly a moment ago and funds haven't grown since
-        late = entry_block_reason(v["signal"], v, cfg)
-        if late:
-            if time.time() - _chase_logged_at.get(sym, 0) >= UNAFFORDABLE_RETRY_SECONDS:
-                _chase_logged_at[sym] = time.time()
-                _event("SKIP", sym, f"{v['signal']} not chased: {late}")
-            continue
         try:
             if _enter_trade(sym, v["spot"], cfg, direction=v["signal"], available=available):
                 entered += 1

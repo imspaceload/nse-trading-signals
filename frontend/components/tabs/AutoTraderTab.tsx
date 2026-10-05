@@ -11,7 +11,7 @@ import { useToast } from '../Toast';
 
 type NumKey = 'total_capital' | 'max_margin_pct' | 'max_active_trades' | 'max_trades_per_day' | 'profit_target_pct'
   | 'averaging_drop_pct' | 'max_averaging_rounds' | 'stop_loss_pct' | 'min_entry_score'
-  | 'lots_per_trade' | 'max_vwap_distance_pct' | 'max_day_move_pct';
+  | 'lots_per_trade';
 
 const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max: number; step: number; int?: boolean }[] = [
   { key: 'total_capital', label: 'Total capital (₹)', min: 100, max: 1e9, step: 1000 },
@@ -24,8 +24,6 @@ const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max:
   { key: 'max_averaging_rounds', label: 'Max averaging rounds', min: 0, max: 10, step: 1, int: true },
   { key: 'min_entry_score', label: 'Min signal score (of 5)', min: 1, max: 5, step: 1, int: true },
   { key: 'lots_per_trade', label: 'Lots per trade (options)', hint: 'Per entry & averaging round · 0 = as many as the cap allows', min: 0, max: 100, step: 1, int: true },
-  { key: 'max_vwap_distance_pct', label: 'Max distance from VWAP (%)', hint: "Don't buy CE this far above / PE this far below today's VWAP · 0 = off", min: 0, max: 20, step: 0.25 },
-  { key: 'max_day_move_pct', label: 'Max day move (%)', hint: "Don't enter if already up (CE) / down (PE) this much today · 0 = off", min: 0, max: 20, step: 0.5 },
 ];
 
 type SelectKey = 'trade_mode' | 'stop_loss_action' | 'product' | 'square_off_eod';
@@ -349,7 +347,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         {!showWatch ? (
           <p className="text-xs text-muted">
             Top 4 stocks per sector with a clear bullish/bearish signal (15m). Bullish → buys the ATM CE, bearish → the ATM PE.
-            Only stocks scoring ≥ {cfg.min_entry_score}/5 that haven&apos;t already run away from today&apos;s VWAP are traded. Click Show to load.
+            Only stocks scoring ≥ {cfg.min_entry_score}/5 are traded, and only within 30 min of the signal firing, so the bot never buys after the move is done. Click Show to load.
           </p>
         ) : watch.loading ? (
           <SkeletonRows rows={6} />
@@ -360,7 +358,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 bg-card">
                 <tr className="border-b border-line text-muted">
-                  {['Stock', 'Sector', 'Price', 'Day %', 'vs VWAP', 'Score', 'Bias', 'Trade'].map(h => <th key={h} className="px-2 py-1.5 text-left">{h}</th>)}
+                  {['Stock', 'Sector', 'Price', 'Day %', 'Score', 'Bias', 'Trade'].map(h => <th key={h} className="px-2 py-1.5 text-left">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -370,10 +368,9 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
                     <td className="px-2 py-1.5 text-dim">{w.sector}</td>
                     <td className="px-2 py-1.5">₹{fmtPrice(w.spot)}</td>
                     <td className={`px-2 py-1.5 ${pnlClass(w.day_pct)}`}>{fmtPct(w.day_pct)}</td>
-                    <td className="px-2 py-1.5 text-dim">{w.vwap_dist_pct == null ? '—' : fmtPct(w.vwap_dist_pct)}</td>
                     <td className="px-2 py-1.5 text-warn">{w.score}/5</td>
                     <td className="px-2 py-1.5"><DirBadge dir={w.signal} /></td>
-                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : w.blocked ? `Too late: ${w.blocked}` : `Below min score`}</td>
+                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : w.score >= cfg.min_entry_score ? 'Signal >30 min old — not chasing' : 'Below min score'}</td>
                   </tr>
                 ))}
               </tbody>

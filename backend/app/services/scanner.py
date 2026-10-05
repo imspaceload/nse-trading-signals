@@ -9,7 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.services import zerodha
-from app.services.indicators import compute_macd, compute_rsi, compute_supertrend, compute_vwap, session_stats
+from app.services.indicators import compute_macd, compute_rsi, compute_supertrend, compute_vwap, day_change_pct
 from app.services.sector_watchlist import SECTOR_STOCKS
 
 SECTOR_UNIVERSE = tuple(sorted({s for stocks in SECTOR_STOCKS.values() for s in stocks}))
@@ -87,7 +87,7 @@ def score_one(sym: str, df: pd.DataFrame) -> Optional[dict]:
         max_score = max(buy_pts, sell_pts)
         direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
 
-        day_pct = session_stats(df)["day_pct"]
+        day_pct = day_change_pct(df)
 
         rsi_val = round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0
         return {
