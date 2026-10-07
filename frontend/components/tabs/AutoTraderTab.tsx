@@ -21,7 +21,7 @@ const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max:
   { key: 'profit_target_pct', label: 'Profit target (%)', min: 0.5, max: 100, step: 0.5 },
   { key: 'stop_loss_pct', label: 'Stop-loss (%)', hint: '0 = off', min: 0, max: 90, step: 0.5 },
   { key: 'averaging_drop_pct', label: 'Averaging trigger drop (%)', min: 0.5, max: 50, step: 0.5 },
-  { key: 'max_averaging_rounds', label: 'Max averaging rounds', min: 0, max: 10, step: 1, int: true },
+  { key: 'max_averaging_rounds', label: 'Max averaging rounds', hint: 'Extra buys after the entry · 0 = never', min: 0, max: 10, step: 1, int: true },
   { key: 'min_entry_score', label: 'Min signal score (of 5)', min: 1, max: 5, step: 1, int: true },
   { key: 'lots_per_trade', label: 'Lots per trade (options)', hint: 'Per entry & averaging round · 0 = as many as the cap allows', min: 0, max: 100, step: 1, int: true },
 ];

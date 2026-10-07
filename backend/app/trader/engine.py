@@ -30,6 +30,7 @@ on how much capital that can consume.
 import traceback
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -226,11 +227,24 @@ def set_config(**kwargs) -> dict:
         cfg["id"] = 1
         sb = _get_supabase()
         if sb:
-            try:
-                sb.table("auto_trader_config").upsert(cfg).execute()
-                print("[auto_trader] config saved to Supabase")
-            except Exception as e:
-                print(f"[auto_trader] supabase save config FAILED: {e}")
+            # A column missing from the table (migration not run yet) fails the WHOLE upsert, and the
+            # worker would then keep reading the old row — e.g. stop_loss_action stuck on EXIT. Drop the
+            # unknown columns and retry so every other setting still lands (the local file keeps the rest).
+            row = dict(cfg)
+            while True:
+                try:
+                    sb.table("auto_trader_config").upsert(row).execute()
+                    print("[auto_trader] config saved to Supabase")
+                    break
+                except Exception as e:
+                    m = re.search(r"Could not find the '(\w+)' column", str(e))
+                    if m and m.group(1) in row and m.group(1) != "id":
+                        row.pop(m.group(1))
+                        print(f"[auto_trader] Supabase auto_trader_config has no '{m.group(1)}' column — "
+                              "run sql/supabase_auto_trader_tables.sql; saving the other settings")
+                        continue
+                    print(f"[auto_trader] supabase save config FAILED: {e}")
+                    break
         try:
             with open(CONFIG_FILE, "w") as f:
                 json.dump(cfg, f, indent=2)
@@ -681,6 +695,11 @@ def _lot_size(pos: dict) -> int:
     return pos["qty_per_round"]
 
 
+def _averages_done(pos: dict) -> int:
+    """Averaging buys made so far — `rounds` also counts the entry, so 'Max averaging rounds' = N allows N adds."""
+    return max(int(pos.get("rounds") or 1) - 1, 0)
+
+
 def _average_down(pos: dict, cur_price: float, cfg: dict, qty: Optional[int] = None) -> str:
     """
     Buy `qty` more (default: one normal round). Returns "ok", "blocked"
@@ -692,12 +711,15 @@ def _average_down(pos: dict, cur_price: float, cfg: dict, qty: Optional[int] = N
     max_trade_capital = cfg["total_capital"] * cfg["max_margin_pct"] / 100.0
 
     if cost_basis + added_capital > max_trade_capital:
-        _event("SKIP", pos["symbol"], "averaging skipped: would exceed per-trade margin cap")
+        _event("SKIP", pos["symbol"], f"averaging skipped: {cost_basis:.0f} already in + {added_capital:.0f} for "
+               f"{qty} more = {cost_basis + added_capital:.0f} > per-trade cap {max_trade_capital:.0f} "
+               "(capital × max margin %)")
         return "blocked"
 
     available = _available_cash()
     if available < added_capital:
-        _event("SKIP", pos["symbol"], "averaging skipped: insufficient available funds")
+        _event("SKIP", pos["symbol"], f"averaging skipped: {qty} more needs {added_capital:.0f}, "
+               f"available funds {available:.0f}")
         return "blocked"
 
     order = zerodha.place_and_confirm(
@@ -831,7 +853,7 @@ def _check_exits_and_averaging(cfg: dict):
                 can_average = (
                     cfg.get("stop_loss_action") == "AVERAGE"
                     and not p.get("paused_averaging")
-                    and p["rounds"] < cfg["max_averaging_rounds"]
+                    and _averages_done(p) < cfg["max_averaging_rounds"]
                 )
                 if can_average:
                     result = _average_down(p, cur, cfg, qty=_lot_size(p))
@@ -842,7 +864,7 @@ def _check_exits_and_averaging(cfg: dict):
                 _persist_price(p, cur, pnl, pnl_pct)
             continue
 
-        if p.get("paused_averaging") or p["rounds"] >= cfg["max_averaging_rounds"]:
+        if p.get("paused_averaging") or _averages_done(p) >= cfg["max_averaging_rounds"]:
             _persist_price(p, cur, pnl, pnl_pct)
             continue
 
