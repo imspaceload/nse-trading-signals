@@ -201,29 +201,58 @@ def is_configured() -> bool:
     )
 
 
-# Cache connected state for 60s to avoid profile() call on every render
+# Cache connected state to avoid a profile() call on every request
 _connected_cache: bool = False
 _connected_checked_at: float = 0
-_CONNECTED_TTL = 60
+_last_ok_at: float = 0
+_CONNECTED_TTL = 60        # re-validate a working token this often
+_DISCONNECTED_TTL = 10     # while disconnected, look for a login made in another process this often
+_BLIP_RETRY = 5            # Kite unreachable: re-check this soon...
+_BLIP_GRACE = 180          # ...but keep saying "connected" for up to this long since the last good check
+
+
+def _mark_connected(ok: bool):
+    global _connected_cache, _connected_checked_at, _kite_connected, _last_ok_at
+    _connected_cache = _kite_connected = ok
+    _connected_checked_at = time.time()
+    if ok:
+        _last_ok_at = _connected_checked_at
+
+
+def _check_token(kite) -> Optional[bool]:
+    """True = token works, False = Kite rejected it (or there is none), None = couldn't ask (network, rate limit)."""
+    if not kite.access_token:
+        return False
+    try:
+        kite.profile()
+        return True
+    except Exception as e:
+        from kiteconnect.exceptions import TokenException
+        return False if isinstance(e, TokenException) else None
 
 
 def is_connected() -> bool:
-    """True if access token is valid. Cached 60s to avoid per-render network call."""
-    global _connected_cache, _connected_checked_at, _kite_connected
+    """
+    True if the access token is valid. The API runs several worker processes and the trader worker is another
+    one, but the login lands in only one of them — so a missing or rejected token is re-read from storage
+    (restore_saved_token) before answering no. A network blip or rate limit is not a logout: the last good
+    answer stands for up to _BLIP_GRACE, otherwise the dashboard flickers and the trader stops watching exits.
+    """
+    global _connected_checked_at
     now = time.time()
-    if now - _connected_checked_at < _CONNECTED_TTL:
+    if now - _connected_checked_at < (_CONNECTED_TTL if _connected_cache else _DISCONNECTED_TTL):
         return _connected_cache
     kite = get_kite()
     if not kite:
         return False
-    try:
-        kite.profile()
-        _connected_cache = True
-        _kite_connected = True
-    except Exception:
-        _connected_cache = False
-        _kite_connected = False
-    _connected_checked_at = now
+    ok = _check_token(kite)
+    if ok is None and _connected_cache and now - _last_ok_at < _BLIP_GRACE:
+        _connected_checked_at = now - _CONNECTED_TTL + _BLIP_RETRY
+        return True
+    if ok:
+        _mark_connected(True)
+    elif not restore_saved_token():   # restore marks connected itself when it works
+        _mark_connected(False)
     return _connected_cache
 
 
@@ -235,22 +264,14 @@ def restore_saved_token() -> bool:
         kite = get_kite()
         if kite:
             kite.set_access_token(token)
-            # Quick validate
-            try:
-                kite.profile()
-                global _kite_connected, _connected_cache, _connected_checked_at
-                _kite_connected = True
-                _connected_cache = True                  # don't let a stale "disconnected" answer linger
-                _connected_checked_at = time.time()
+            if _check_token(kite):
+                _mark_connected(True)   # don't let a stale "disconnected" answer linger
                 return True
-            except Exception:
-                pass
     return False
 
 
 def disconnect() -> None:
     """Fully log out: invalidate the token at Zerodha, drop it from memory, caches and storage."""
-    global _kite_connected, _connected_cache, _connected_checked_at
     kite = _kite
     if kite is not None:
         try:
@@ -260,9 +281,7 @@ def disconnect() -> None:
             print(f"[zerodha] invalidate_access_token failed (ignored): {e}")
         kite.set_access_token(None)
     os.environ.pop("KITE_ACCESS_TOKEN", None)
-    _kite_connected = False
-    _connected_cache = False
-    _connected_checked_at = time.time()
+    _mark_connected(False)
     _clear_saved_token()
     try:
         os.remove(config.data_path("kite_token.txt"))
@@ -292,10 +311,7 @@ def complete_login(request_token: str) -> Optional[str]:
         kite.set_access_token(access_token)
         today = datetime.now(IST).strftime("%Y-%m-%d")
         _save_token(access_token, today)
-        global _kite_connected, _connected_cache, _connected_checked_at
-        _kite_connected = True
-        _connected_cache = True
-        _connected_checked_at = time.time()
+        _mark_connected(True)
         return access_token
     except Exception as e:
         print(f"[zerodha] complete_login failed: {e}")
