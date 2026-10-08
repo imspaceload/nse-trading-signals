@@ -59,6 +59,12 @@ SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
 FRESH_SIGNAL_BARS = 2  # enter only if the signal fired on the forming 15m candle or the one just closed
 UNAFFORDABLE_RETRY_SECONDS = 300  # a pick too costly for the funds isn't re-tried for this long, unless funds grow
+# Never buy near the day's high: the price paid must sit in the lower half of today's low–high range of the
+# contract actually bought (option premium / stock price). A range narrower than MIN_DAY_RANGE_PCT of the price
+# means it hasn't moved yet, so there is no "high" to avoid.
+MAX_ENTRY_RANGE_POS = 0.5
+MIN_DAY_RANGE_PCT = 3.0
+_HIGH_SKIP_LOG_SECONDS = 300
 
 DEFAULT_CONFIG = {
     "id": 1,
@@ -84,6 +90,7 @@ DEFAULT_CONFIG = {
 _engine_lock = threading.RLock()
 _unaffordable: Dict[str, tuple] = {}  # nse_symbol -> (time.time() when skipped, funds available then)
 _no_funds_logged_at = 0.0
+_high_skip_logged_at: Dict[str, float] = {}
 
 
 # ── Secrets / Supabase (same pattern as jobs/trades.py / services/sms.py) ─────────
@@ -506,6 +513,33 @@ def _recently_ordered(pos: dict) -> bool:
 
 # ── Entries ──────────────────────────────────────────────────────────────────
 
+def _entry_price_check(tradingsymbol: str, exchange: str) -> tuple:
+    """(live price, None) when the contract trades in the lower half of today's range, else (None, reason).
+    Fails closed: no quote / no range -> no entry."""
+    try:
+        q = zerodha.get_quotes([tradingsymbol], exchange=exchange).get(tradingsymbol) or {}
+    except Exception:
+        q = {}
+    ltp, high, low = q.get("last_price") or 0, q.get("high") or 0, q.get("low") or 0
+    if not ltp or not high or not low:
+        return None, f"no live quote/day range for {tradingsymbol}"
+    day_range = high - low
+    if day_range < ltp * MIN_DAY_RANGE_PCT / 100:
+        return ltp, None
+    pos = (ltp - low) / day_range
+    if pos > MAX_ENTRY_RANGE_POS:
+        return None, (f"{tradingsymbol} @ {ltp:g} is at {pos:.0%} of today's range {low:g}–{high:g} "
+                      f"(open {q.get('open') or 0:g}) — not buying near the high, waiting for the middle or lower")
+    return ltp, None
+
+
+def _skip_near_high(nse_symbol: str, reason: str):
+    """The reason carries live prices, so _event's identical-line dedup can't throttle it — do it here."""
+    if time.time() - _high_skip_logged_at.get(nse_symbol, 0) >= _HIGH_SKIP_LOG_SECONDS:
+        _high_skip_logged_at[nse_symbol] = time.time()
+        _event("SKIP", nse_symbol, reason)
+
+
 def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY",
                  available: Optional[float] = None) -> Optional[dict]:
     """direction BUY (bullish) -> buy ATM CE; SELL (bearish) -> buy ATM PE (OPTIONS mode only)."""
@@ -529,6 +563,11 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         if not opt or not opt.get("ltp"):
             _event("SKIP", nse_symbol, f"no ATM {want} contract/LTP found (spot {spot:.2f})")
             return None
+        ltp, why = _entry_price_check(opt["tradingsymbol"], "NFO")
+        if why:
+            _skip_near_high(nse_symbol, why)
+            return None
+        opt["ltp"] = ltp
         lot_size = opt["lot_size"]
         lot_cost = opt["ltp"] * lot_size
         want_lots = int(cfg.get("lots_per_trade") or 0)
@@ -546,6 +585,11 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
     else:
         if spot <= 0:
             return None
+        ltp, why = _entry_price_check(nse_symbol, "NSE")
+        if why:
+            _skip_near_high(nse_symbol, why)
+            return None
+        spot = ltp
         qty = int(budget // spot)
         if qty < 1:
             _unaffordable[nse_symbol] = (time.time(), available)
