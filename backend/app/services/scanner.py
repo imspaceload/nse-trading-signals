@@ -9,7 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.services import zerodha
-from app.services.indicators import compute_macd, compute_rsi, compute_supertrend, compute_vwap
+from app.services.indicators import assess_entry_stretch, compute_macd, compute_rsi, compute_supertrend, compute_vwap
 from app.services.sector_watchlist import SECTOR_STOCKS
 
 SECTOR_UNIVERSE = tuple(sorted({s for stocks in SECTOR_STOCKS.values() for s in stocks}))
@@ -84,6 +84,19 @@ def score_one(sym: str, df: pd.DataFrame) -> Optional[dict]:
             if buy_pts > sell_pts:   buy_pts  += 1
             elif sell_pts > buy_pts: sell_pts += 1
 
+        direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
+
+        # Don't chase an already-stretched move: a candidate that's overextended from
+        # VWAP or sitting right at the resistance/support it would need to break
+        # loses a point — that's exactly where a reversal (e.g. big-player unwinding)
+        # is most likely to start, and the indicators above can't see it coming.
+        stretch = assess_entry_stretch(df, vwap_d.get("value") if vwap_d else None, direction)
+        if stretch["overextended"] or stretch["near_level"]:
+            if direction == "BUY":
+                buy_pts = max(buy_pts - 1, 0)
+            elif direction == "SELL":
+                sell_pts = max(sell_pts - 1, 0)
+
         max_score = max(buy_pts, sell_pts)
         direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
 
@@ -106,6 +119,7 @@ def score_one(sym: str, df: pd.DataFrame) -> Optional[dict]:
             "vwap":       vwap_sig,
             "vol_spike":  vol_spike,
             "day_pct":    day_pct,
+            "chase_reason": stretch["reason"],
         }
     except Exception:
         return None

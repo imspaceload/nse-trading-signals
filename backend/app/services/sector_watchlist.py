@@ -7,7 +7,7 @@ import concurrent.futures
 import pandas as pd
 
 from app.services import zerodha
-from app.services.indicators import compute_rsi, compute_macd, compute_supertrend, compute_vwap
+from app.services.indicators import assess_entry_stretch, compute_rsi, compute_macd, compute_supertrend, compute_vwap
 
 # NSE F&O stocks grouped by sector (trading symbols)
 SECTOR_STOCKS = {
@@ -91,6 +91,18 @@ def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use
                 if buy_pts > sell_pts:   buy_pts  += 1
                 elif sell_pts > buy_pts: sell_pts += 1
 
+            direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
+
+            # Anti-chase: a candidate overextended from VWAP, or already sitting at the
+            # resistance/support it would need to break, loses a point instead of being
+            # traded as-is — that's where a reversal is most likely to start.
+            stretch = assess_entry_stretch(df, vwap_d.get("value") if vwap_d else None, direction)
+            if stretch["overextended"] or stretch["near_level"]:
+                if direction == "BUY":
+                    buy_pts = max(buy_pts - 1, 0)
+                elif direction == "SELL":
+                    sell_pts = max(sell_pts - 1, 0)
+
             max_score = max(buy_pts, sell_pts)
             direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
             try:
@@ -105,6 +117,7 @@ def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use
                 "rsi": rsi_val, "macd": macd_sig,
                 "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
                 "vwap": vwap_sig, "vol_spike": vol_spike, "day_pct": day_pct,
+                "chase_reason": stretch["reason"],
             }
         except Exception:
             return nse_sym, None
@@ -145,5 +158,6 @@ def build_watchlist(timeframe: str = "15m", use_kite: bool = False, per_sector: 
                 picks[sym] = {
                     "signal": v["direction"], "spot": v["spot"], "score": v["score"],
                     "sector": sector, "rsi": v["rsi"], "day_pct": v["day_pct"],
+                    "chase_reason": v.get("chase_reason") or "",
                 }
     return picks

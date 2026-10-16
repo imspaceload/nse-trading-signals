@@ -40,7 +40,8 @@ import pytz
 
 from app.services import zerodha
 from app.core.config import data_path
-from app.services.market_data import is_market_open
+from app.services.market_data import get_option_chain_data, is_market_open
+from app.services.indicators import compute_supertrend, evaluate_oi
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -452,6 +453,21 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
     if max_trade_capital <= 0:
         return None
 
+    # OI/PCR veto: the equity-side indicators (RSI/MACD/Supertrend/VWAP) can't see
+    # options positioning, so a stock can score as a clean BUY while large players
+    # are writing calls / building puts against it. Only block on an EXPLICIT
+    # contradicting signal — NEUTRAL (no data, or OI genuinely mixed) lets the trade
+    # through, so a flaky NSE fetch never silently blocks every entry.
+    try:
+        oi = evaluate_oi(get_option_chain_data(nse_symbol))
+        if oi["signal"] != "NEUTRAL" and oi["signal"] != direction:
+            _event("SKIP", nse_symbol,
+                   f"OI/PCR contradicts {direction} (pcr={oi['pcr']}, net_oi_change={oi['net_oi_change']}) "
+                   f"— looks like large players are positioned the other way")
+            return None
+    except Exception:
+        pass
+
     # Never size or place an order beyond the real funds in the account.
     available = _available_cash()
     if available <= 0:
@@ -601,6 +617,25 @@ def _lot_size(pos: dict) -> int:
         except Exception:
             pass
     return pos["qty_per_round"]
+
+
+def _trend_still_supports(pos: dict) -> bool:
+    """
+    Before adding more capital to a losing position, check whether the move that
+    justified the original entry is still intact — a Supertrend flip on the underlying
+    means this is a real breakdown/reversal, not the dip the averaging logic assumes.
+    Fails OPEN (returns True) on any data problem: a quote hiccup should never be the
+    reason a position gets dumped, only a confirmed trend flip should.
+    """
+    try:
+        df = zerodha.get_historical_data(pos["symbol"], "15m", exchange="NSE")
+        if df is None or df.empty:
+            return True
+        st = compute_supertrend(df)
+        want_bullish = pos.get("option_type") != "PE"
+        return bool(st.get("direction") == 1) == want_bullish
+    except Exception:
+        return True
 
 
 def _average_down(pos: dict, cur_price: float, cfg: dict, qty: Optional[int] = None) -> str:
@@ -754,6 +789,7 @@ def _check_exits_and_averaging(cfg: dict):
                     cfg.get("stop_loss_action") == "AVERAGE"
                     and not p.get("paused_averaging")
                     and p["rounds"] < cfg["max_averaging_rounds"]
+                    and _trend_still_supports(p)
                 )
                 if can_average:
                     result = _average_down(p, cur, cfg, qty=_lot_size(p))
@@ -770,7 +806,10 @@ def _check_exits_and_averaging(cfg: dict):
 
         drop_pct = ((p["avg_price"] - cur) / p["avg_price"] * 100) if p["avg_price"] else 0
         if drop_pct >= cfg["averaging_drop_pct"]:
-            _average_down(p, cur, cfg)
+            if _trend_still_supports(p):
+                _average_down(p, cur, cfg)
+            else:
+                _exit_position(p, cur, reason="trend_invalidated")
         else:
             _persist_price(p, cur, pnl, pnl_pct)
 
