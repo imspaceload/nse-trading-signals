@@ -169,6 +169,51 @@ def compute_support_resistance(df: pd.DataFrame) -> dict:
     }
 
 
+def assess_entry_stretch(df: pd.DataFrame, vwap_value: Optional[float], direction: str) -> dict:
+    """
+    Flags a BUY/SELL candidate that is chasing an already-stretched move rather than
+    catching a fresh confirmation. Trend indicators (MACD/Supertrend/VWAP) only agree
+    *after* price has moved, so without this check the scanner buys strength and sells
+    weakness right as a reversal (e.g. large players unwinding into retail flow) is due.
+
+    overextended: price is already more than ~1.2x the recent ATR away from VWAP —
+    a stretched intraday move, high odds of mean-reverting against the new position.
+    near_level: price sits inside half an ATR of the pivot level it would need to break
+    through (R1 for a BUY, S1 for a SELL) — poor risk:reward, and exactly where a
+    reversal is most likely to start.
+    """
+    out = {"overextended": False, "near_level": False, "reason": ""}
+    if direction not in ("BUY", "SELL") or df is None or len(df) < SUPERTREND_PERIOD + 1:
+        return out
+    try:
+        last_close = float(df["Close"].iloc[-1])
+        atr = ta.volatility.AverageTrueRange(
+            df["High"], df["Low"], df["Close"], window=SUPERTREND_PERIOD
+        ).average_true_range()
+        last_atr = float(atr.iloc[-1])
+        if last_close <= 0 or last_atr <= 0:
+            return out
+        atr_pct = last_atr / last_close * 100
+
+        if vwap_value:
+            dist_pct = abs(last_close - vwap_value) / vwap_value * 100
+            if dist_pct > atr_pct * 1.2:
+                out["overextended"] = True
+                out["reason"] = f"{dist_pct:.2f}% away from VWAP, > 1.2x ATR ({atr_pct:.2f}%)"
+
+        sr = compute_support_resistance(df)
+        band = last_atr * 0.5
+        if direction == "BUY" and last_close >= sr["r1"] - band:
+            out["near_level"] = True
+            out["reason"] = (out["reason"] + "; " if out["reason"] else "") + f"within half-ATR of R1 ({sr['r1']})"
+        elif direction == "SELL" and last_close <= sr["s1"] + band:
+            out["near_level"] = True
+            out["reason"] = (out["reason"] + "; " if out["reason"] else "") + f"within half-ATR of S1 ({sr['s1']})"
+    except Exception:
+        return {"overextended": False, "near_level": False, "reason": ""}
+    return out
+
+
 def compute_all_signals(df: pd.DataFrame, interval: str = "5m") -> list:
     """Detect high-quality crossover signals on the chart.
 
