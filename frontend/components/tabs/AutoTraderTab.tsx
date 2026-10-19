@@ -10,7 +10,8 @@ import { useToast } from '../Toast';
 // ── Config form definition ──────────────────────────────────────────────────
 
 type NumKey = 'total_capital' | 'max_margin_pct' | 'max_active_trades' | 'max_trades_per_day' | 'profit_target_pct'
-  | 'averaging_drop_pct' | 'max_averaging_rounds' | 'stop_loss_pct' | 'min_entry_score';
+  | 'averaging_drop_pct' | 'max_averaging_rounds' | 'stop_loss_pct' | 'min_entry_score'
+  | 'lots_per_trade';
 
 const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max: number; step: number; int?: boolean }[] = [
   { key: 'total_capital', label: 'Total capital (₹)', min: 100, max: 1e9, step: 1000 },
@@ -20,11 +21,13 @@ const NUM_FIELDS: { key: NumKey; label: string; hint?: string; min: number; max:
   { key: 'profit_target_pct', label: 'Profit target (%)', min: 0.5, max: 100, step: 0.5 },
   { key: 'stop_loss_pct', label: 'Stop-loss (%)', hint: '0 = off', min: 0, max: 90, step: 0.5 },
   { key: 'averaging_drop_pct', label: 'Averaging trigger drop (%)', min: 0.5, max: 50, step: 0.5 },
-  { key: 'max_averaging_rounds', label: 'Max averaging rounds', min: 0, max: 10, step: 1, int: true },
+  { key: 'max_averaging_rounds', label: 'Max averaging rounds', hint: 'Extra buys after the entry · 0 = never', min: 0, max: 10, step: 1, int: true },
   { key: 'min_entry_score', label: 'Min signal score (of 5)', min: 1, max: 5, step: 1, int: true },
+  { key: 'lots_per_trade', label: 'Lots per trade (options)', hint: 'Per entry & averaging round · 0 = as many as the cap allows', min: 0, max: 100, step: 1, int: true },
 ];
 
-type Draft = Partial<Record<NumKey | 'trade_mode' | 'stop_loss_action', string>>;
+type SelectKey = 'trade_mode' | 'stop_loss_action' | 'product' | 'square_off_eod';
+type Draft = Partial<Record<NumKey | SelectKey, string>>;
 
 function buildChanges(cfg: AutoTraderConfig, draft: Draft): { changes: Partial<AutoTraderConfig>; problem: string | null } {
   const changes: Record<string, number | string> = {};
@@ -39,7 +42,10 @@ function buildChanges(cfg: AutoTraderConfig, draft: Draft): { changes: Partial<A
   }
   if (draft.trade_mode !== undefined && draft.trade_mode !== cfg.trade_mode) changes.trade_mode = draft.trade_mode;
   if (draft.stop_loss_action !== undefined && draft.stop_loss_action !== cfg.stop_loss_action) changes.stop_loss_action = draft.stop_loss_action;
-  return { changes: changes as Partial<AutoTraderConfig>, problem: null };
+  if (draft.product !== undefined && draft.product !== cfg.product) changes.product = draft.product;
+  const out = changes as Partial<AutoTraderConfig>;
+  if (draft.square_off_eod !== undefined && (draft.square_off_eod === 'true') !== cfg.square_off_eod) out.square_off_eod = draft.square_off_eod === 'true';
+  return { changes: out, problem: null };
 }
 
 // ── Small pieces ────────────────────────────────────────────────────────────
@@ -106,8 +112,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
 
   const s: AutoTraderState = data;
   const cfg = s.config;
-  const value = (k: NumKey | 'trade_mode' | 'stop_loss_action') => draft?.[k] ?? String(cfg[k]);
-  const edit = (k: NumKey | 'trade_mode' | 'stop_loss_action', v: string) => {
+  const value = (k: NumKey | SelectKey) => draft?.[k] ?? String(cfg[k]);
+  const edit = (k: NumKey | SelectKey, v: string) => {
     setFormError(null);
     setDraft(prev => ({ ...(prev ?? {}), [k]: v }));
   };
@@ -161,7 +167,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         <StatusPill ok={s.kite_connected} text={s.kite_connected ? 'Zerodha connected' : 'Zerodha logged out'} />
         <StatusPill ok={s.market_open} text={s.market_open ? 'Market open' : 'Market closed'} />
         <span className="text-[11px] text-muted">
-          Intraday only (MIS) · no new entries after {s.rules.entry_cutoff} · everything sold at {s.rules.square_off} IST
+          Product {s.rules.product} · no new entries after {s.rules.entry_cutoff} ·{' '}
+          {s.rules.product === 'MIS' || cfg.square_off_eod ? `auto-trades sold at ${s.rules.square_off} IST` : 'auto-trades carried overnight'}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <Updated at={updatedAt} refreshing={refreshing} />
@@ -176,7 +183,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         <Stat label="Total capital" value={`₹${fmtInt(sum.total_capital)}`} />
         <Stat label="Deployed" value={`₹${fmtInt(sum.deployed)}`} />
         <Stat label={sum.available_is_live ? 'Available (live)' : 'Available (est.)'} value={`₹${fmtInt(sum.available)}`} />
-        <Stat label="P&L today" value={fmtSigned(sum.pnl_today)} tone={pnlClass(sum.pnl_today)} />
+        <Stat label={sum.pnl_is_live ? 'P&L (Zerodha)' : 'P&L today (bot)'} value={fmtSigned(sum.pnl_today)} tone={pnlClass(sum.pnl_today)} />
         <Stat label="Active trades" value={`${sum.open_count} / ${sum.max_active_trades}`} />
         <Stat label="Trades today" value={cfg.max_trades_per_day > 0 ? `${s.trades_today} / ${cfg.max_trades_per_day}` : `${s.trades_today} / ∞`} />
       </div>
@@ -235,6 +242,8 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
       {/* Configuration */}
       <Card
         title="Configuration"
+        collapsible
+        defaultOpen={false}
         right={draft && <span className="text-[10px] text-warn">Unsaved changes</span>}
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -270,6 +279,24 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
               <option value="AVERAGE">Add one more lot (average)</option>
             </select>
           </label>
+          <label className="block text-[11px] text-dim">
+            Order product
+            <select value={value('product')} onChange={e => edit('product', e.target.value)}
+              className="mt-1 w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none">
+              <option value="NRML">NRML / CNC (carry-forward)</option>
+              <option value="MIS">MIS (intraday)</option>
+            </select>
+            <span className="text-[10px] text-muted">NRML for options, CNC for equity</span>
+          </label>
+          <label className="block text-[11px] text-dim">
+            At {s.rules.square_off} IST
+            <select value={value('square_off_eod')} onChange={e => edit('square_off_eod', e.target.value)}
+              className="mt-1 w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-foreground outline-none">
+              <option value="true">Sell the auto-trader&apos;s open trades</option>
+              <option value="false">Hold the auto-trader&apos;s NRML / CNC trades overnight</option>
+            </select>
+            <span className="text-[10px] text-muted">Only trades the bot opened — your manual Kite trades are never touched. MIS trades are always sold.</span>
+          </label>
         </div>
         {formError && <div className="mt-3"><ErrorBox message={formError} /></div>}
         <div className="mt-3 flex gap-2">
@@ -279,7 +306,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
       </Card>
 
       {/* Closed trades */}
-      <Card title={`Recent closed trades (${s.closed.length})`}>
+      <Card title={`Recent closed trades (${s.closed.length})`} collapsible defaultOpen={false}>
         {s.closed.length === 0 ? (
           <Empty>No closed trades yet.</Empty>
         ) : (
@@ -320,7 +347,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
         {!showWatch ? (
           <p className="text-xs text-muted">
             Top 4 stocks per sector with a clear bullish/bearish signal (15m). Bullish → buys the ATM CE, bearish → the ATM PE.
-            Only stocks scoring ≥ {cfg.min_entry_score}/5 are traded. Click Show to load.
+            Only stocks scoring ≥ {cfg.min_entry_score}/5 are traded, and only within 30 min of the signal firing, so the bot never buys after the move is done. Click Show to load.
           </p>
         ) : watch.loading ? (
           <SkeletonRows rows={6} />
@@ -343,7 +370,7 @@ export function AutoTraderTab({ active, marketOpen }: { active: boolean; marketO
                     <td className={`px-2 py-1.5 ${pnlClass(w.day_pct)}`}>{fmtPct(w.day_pct)}</td>
                     <td className="px-2 py-1.5 text-warn">{w.score}/5</td>
                     <td className="px-2 py-1.5"><DirBadge dir={w.signal} /></td>
-                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : `Below min score`}</td>
+                    <td className="px-2 py-1.5 text-dim">{w.eligible ? `Buy ${w.side}` : w.score >= cfg.min_entry_score ? 'Signal >30 min old — not chasing' : 'Below min score'}</td>
                   </tr>
                 ))}
               </tbody>

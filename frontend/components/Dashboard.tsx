@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../lib/api';
 import { DEFAULT_WATCHLIST, SECTORS, TABS, isTabKey, type TabKey } from '../lib/constants';
+import { fmtPrice, pnlClass } from '../lib/format';
 import { useTicker } from '../hooks/useTicker';
 import { usePolling } from '../hooks/usePolling';
 import { usePersistentState } from '../hooks/usePersistentState';
@@ -134,10 +135,20 @@ function Terminal() {
 
   const openChart = useCallback((sym: string) => { setActiveSymbol(sym); setTab('chart'); }, [setActiveSymbol, setTab]);
 
+  // ── Phone layout: the watchlist is a drawer ───────────────────────────────
+  const [navOpen, setNavOpen] = useState(false);
+  const selectSymbol = useCallback((sym: string) => { setActiveSymbol(sym); setNavOpen(false); }, [setActiveSymbol]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
+
   const apiDown = !!health.error;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    <div className="flex h-dvh overflow-hidden bg-background text-foreground">
       <Sidebar
         watchlist={watchlist}
         active={activeSymbol}
@@ -146,13 +157,31 @@ function Terminal() {
         kiteConnected={kiteConnected}
         apiDown={apiDown}
         tickerStatus={tickerStatus}
-        onSelect={setActiveSymbol}
+        onSelect={selectSymbol}
         onAdd={addSymbol}
         onRemove={removeSymbol}
         onConnectKite={connectKite}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
       />
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-3 border-b border-line bg-panel-2 px-3 py-2 md:hidden">
+          <button
+            type="button"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open watchlist"
+            aria-expanded={navOpen}
+            className="rounded-md border border-line bg-card px-2.5 py-1 text-sm"
+          >☰</button>
+          <span className="truncate text-sm font-bold">{activeSymbol}</span>
+          {quotes[activeSymbol] && (
+            <span className={`ml-auto text-xs font-semibold ${pnlClass(quotes[activeSymbol].pct)}`}>
+              ₹{fmtPrice(quotes[activeSymbol].ltp)}
+            </span>
+          )}
+        </div>
+
         <StatusBanner
           apiDown={apiDown}
           apiError={health.error?.message}
@@ -169,7 +198,7 @@ function Terminal() {
               type="button"
               aria-selected={tab === t.key}
               onClick={() => setTab(t.key)}
-              className={`whitespace-nowrap border-b-2 px-[18px] py-2.5 text-[13px] ${
+              className={`whitespace-nowrap border-b-2 px-3 py-2.5 text-[13px] md:px-[18px] ${
                 tab === t.key ? 'border-accent font-semibold text-foreground' : 'border-transparent text-muted hover:text-dim'
               }`}
             >
@@ -186,7 +215,7 @@ function Terminal() {
             return (
               <div key={t.key} role="tabpanel" hidden={!active} className={active ? 'h-full' : 'hidden'}>
                 <ErrorBoundary label={t.label.replace(/^\S+\s/, '')}>
-                  {t.key === 'chart' && <ChartTab symbol={activeSymbol} quote={quotes[activeSymbol]} tf={chartTf} onTf={setChartTf} />}
+                  {t.key === 'chart' && <ChartTab symbol={activeSymbol} quote={quotes[activeSymbol]} tf={chartTf} onTf={setChartTf} marketOpen={marketOpen} active={active} />}
                   {t.key === 'optionchain' && <OptionChainTab symbol={ocSymbol} onSymbol={setOcSymbol} marketOpen={marketOpen} active={active} />}
                   {t.key === 'scanner' && <ScannerTab tf={scannerTf} onTf={setScannerTf} onPick={openChart} active={active} />}
                   {t.key === 'sectorpicks' && <SectorPicksTab sector={sector} onSector={setSector} tf={sectorTf} onTf={setSectorTf} onPick={openChart} active={active} />}

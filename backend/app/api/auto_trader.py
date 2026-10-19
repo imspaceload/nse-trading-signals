@@ -42,6 +42,9 @@ class ConfigUpdate(BaseModel):
     min_entry_score: Optional[int] = Field(None, ge=1, le=5)
     stop_loss_pct: Optional[float] = Field(None, ge=0, le=90)
     stop_loss_action: Optional[Literal["EXIT", "AVERAGE"]] = None
+    lots_per_trade: Optional[int] = Field(None, ge=0, le=100)
+    product: Optional[Literal["NRML", "MIS"]] = None
+    square_off_eod: Optional[bool] = None
 
 
 class PauseBody(BaseModel):
@@ -104,6 +107,8 @@ def _build_state() -> dict:
         "rules": {
             "entry_cutoff": _hhmm(engine.ENTRY_CUTOFF),
             "square_off": _hhmm(engine.SQUARE_OFF_TIME),
+            "product": "MIS" if str(cfg.get("product")).upper() == "MIS" else
+                       ("NRML" if cfg.get("trade_mode") == "OPTIONS" else "CNC"),
             "exit_cooldown_seconds": engine.EXIT_COOLDOWN_SECONDS,
         },
         "warnings": warnings,
@@ -203,7 +208,8 @@ def _build_watch() -> List[dict]:
             "sector": v["sector"],
             "rsi": v["rsi"],
             "day_pct": v["day_pct"],
-            "eligible": v["score"] >= min_score,
+            "fresh": engine.is_fresh_signal(v, min_score),
+            "eligible": v["score"] >= min_score and engine.is_fresh_signal(v, min_score),
         })
     rows.sort(key=lambda r: (-r["score"], r["symbol"]))
     return rows

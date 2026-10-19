@@ -117,6 +117,18 @@ def compute_vwap(df: pd.DataFrame) -> dict:
     return {"value": vwap_value, "current_price": current_price, "signal": signal, "series": vwap_series}
 
 
+def day_change_pct(df: pd.DataFrame) -> float:
+    """TODAY's move (intraday candles, several days of history): change vs the previous day's
+    last close, or vs today's open if there's no earlier day."""
+    try:
+        dates = pd.Index(df.index.date)
+        earlier = df[dates < dates[-1]]
+        ref = float(earlier["Close"].iloc[-1]) if not earlier.empty else float(df[dates == dates[-1]]["Open"].iloc[0])
+        return round((float(df["Close"].iloc[-1]) - ref) / ref * 100, 2) if ref else 0.0
+    except Exception:
+        return 0.0
+
+
 def evaluate_oi(oi_data: Optional[dict]) -> dict:
     if not oi_data:
         return {"signal": "NEUTRAL", "pcr": 0, "net_oi_change": 0}

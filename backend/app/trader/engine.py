@@ -30,6 +30,7 @@ on how much capital that can consume.
 import traceback
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -50,11 +51,21 @@ CONFIG_FILE = data_path("auto_trader_config.json")
 POSITIONS_FILE = data_path("auto_trader_positions.json")
 
 DEDUP_SECONDS = 60  # never fire two orders for the same position within this window
-# Intraday only: every order is MIS. No new entries after ENTRY_CUTOFF; anything still open at
-# SQUARE_OFF_TIME is sold by the bot (before Zerodha's own ~3:20 PM auto square-off, which charges a fee).
+# Orders use the configured product (NRML for options / CNC for equity by default, or MIS). No new
+# entries after ENTRY_CUTOFF; at SQUARE_OFF_TIME the bot sells its own MIS positions (before Zerodha's own
+# ~3:20 PM auto square-off, which charges a fee), and its NRML/CNC ones too while `square_off_eod` is on.
+# Only positions in the bot's own ledger are ever sold — manual Kite trades are never touched.
 ENTRY_CUTOFF = (15, 0)
 SQUARE_OFF_TIME = (15, 15)
 EXIT_COOLDOWN_SECONDS = 60  # after an exit, wait before a new entry so released funds show up in Kite
+FRESH_SIGNAL_BARS = 2  # enter only if the signal fired on the forming 15m candle or the one just closed
+UNAFFORDABLE_RETRY_SECONDS = 300  # a pick too costly for the funds isn't re-tried for this long, unless funds grow
+# Never buy near the day's high: the price paid must sit in the lower half of today's low–high range of the
+# contract actually bought (option premium / stock price). A range narrower than MIN_DAY_RANGE_PCT of the price
+# means it hasn't moved yet, so there is no "high" to avoid.
+MAX_ENTRY_RANGE_POS = 0.5
+MIN_DAY_RANGE_PCT = 3.0
+_HIGH_SKIP_LOG_SECONDS = 300
 
 DEFAULT_CONFIG = {
     "id": 1,
@@ -69,12 +80,18 @@ DEFAULT_CONFIG = {
     "trade_paused": False,
     "min_entry_score": 3,
     "stop_loss_pct": 10.0,         # loss % vs avg price that triggers the stop-loss action (0 = disabled)
-    "stop_loss_action": "EXIT",    # EXIT = sell everything | AVERAGE = add one more lot (exit once rounds/margin run out)          # min indicators (of 5) agreeing before a watchlist stock is traded
+    "stop_loss_action": "EXIT",    # EXIT = sell everything | AVERAGE = add one more lot (exit once rounds/margin run out)
+    "lots_per_trade": 1,           # option lots bought per entry / averaging round; 0 = as many as the budget allows
+    "product": "NRML",             # NRML = NRML (options) / CNC (equity), carry-forward | MIS = intraday
+    "square_off_eod": True,        # sell NRML/CNC positions at SQUARE_OFF_TIME too (MIS always is)
 }
 
 # Guards every read-modify-write across a single Streamlit process so two
 # concurrent sessions/reruns can't both act on the same signal/position.
 _engine_lock = threading.RLock()
+_unaffordable: Dict[str, tuple] = {}  # nse_symbol -> (time.time() when skipped, funds available then)
+_no_funds_logged_at = 0.0
+_high_skip_logged_at: Dict[str, float] = {}
 
 
 # ── Secrets / Supabase (same pattern as jobs/trades.py / services/sms.py) ─────────
@@ -218,11 +235,24 @@ def set_config(**kwargs) -> dict:
         cfg["id"] = 1
         sb = _get_supabase()
         if sb:
-            try:
-                sb.table("auto_trader_config").upsert(cfg).execute()
-                print("[auto_trader] config saved to Supabase")
-            except Exception as e:
-                print(f"[auto_trader] supabase save config FAILED: {e}")
+            # A column missing from the table (migration not run yet) fails the WHOLE upsert, and the
+            # worker would then keep reading the old row — e.g. stop_loss_action stuck on EXIT. Drop the
+            # unknown columns and retry so every other setting still lands (the local file keeps the rest).
+            row = dict(cfg)
+            while True:
+                try:
+                    sb.table("auto_trader_config").upsert(row).execute()
+                    print("[auto_trader] config saved to Supabase")
+                    break
+                except Exception as e:
+                    m = re.search(r"Could not find the '(\w+)' column", str(e))
+                    if m and m.group(1) in row and m.group(1) != "id":
+                        row.pop(m.group(1))
+                        print(f"[auto_trader] Supabase auto_trader_config has no '{m.group(1)}' column — "
+                              "run sql/supabase_auto_trader_tables.sql; saving the other settings")
+                        continue
+                    print(f"[auto_trader] supabase save config FAILED: {e}")
+                    break
         try:
             with open(CONFIG_FILE, "w") as f:
                 json.dump(cfg, f, indent=2)
@@ -388,15 +418,19 @@ def get_dashboard_summary() -> dict:
     pnl_closed_today = sum(c.get("pnl", 0) or 0 for c in closed_today)
 
     total_capital = cfg["total_capital"]
-    live_cash = _available_cash() if zerodha.is_connected() else 0
+    connected = zerodha.is_connected()
+    live_cash = _available_cash() if connected else 0
     available = live_cash if live_cash else max(total_capital - deployed, 0)
+    # Kite's own figure covers manual trades too; the ledger only knows the bot's.
+    live_pnl = _account_pnl() if connected else None
 
     return {
         "total_capital": total_capital,
         "deployed": round(deployed, 2),
         "available": round(available, 2),
         "available_is_live": bool(live_cash),
-        "pnl_today": round(pnl_open + pnl_closed_today, 2),
+        "pnl_today": round(live_pnl if live_pnl is not None else pnl_open + pnl_closed_today, 2),
+        "pnl_is_live": live_pnl is not None,
         "open_count": len(open_positions),
         "max_active_trades": cfg["max_active_trades"],
     }
@@ -407,12 +441,40 @@ def _hm() -> tuple:
     return (n.hour, n.minute)
 
 
+def _product_kind(cfg: dict, trade_mode: str) -> str:
+    """Kite product for a new entry: MIS, or the carry-forward product of the instrument type."""
+    if str(cfg.get("product") or "NRML").upper() == "MIS":
+        return "MIS"
+    return "NRML" if trade_mode == "OPTIONS" else "CNC"
+
+
 def _product_for(pos: dict) -> str:
-    """MIS for today's trades. Positions opened on an earlier day (before intraday-only) keep their old product."""
+    """The product the position was bought with (kept on its first order). Older rows without it:
+    MIS if opened today (the intraday-only era), else NRML/CNC from before that."""
+    first = (pos.get("orders") or [{}])[0]
+    if isinstance(first, dict) and first.get("product"):
+        return first["product"]
     created = str(pos.get("created_at") or "")[:10]
     if created and created < datetime.now(IST).date().isoformat():
         return "NRML" if pos.get("trade_mode") == "OPTIONS" else "CNC"
     return "MIS"
+
+
+def signal_age(v: dict, min_score: int) -> int:
+    """How many candles BEFORE the current one already had this signal at >= min_score
+    (0 = it fired on the candle forming now). Capped at the history the watchlist scored."""
+    age = 0
+    for prev in v.get("prev_scores") or []:
+        if prev < min_score:
+            break
+        age += 1
+    return age
+
+
+def is_fresh_signal(v: dict, min_score: int) -> bool:
+    """A signal that has held for longer than FRESH_SIGNAL_BARS candles has already moved the price:
+    entering then buys the top (CE) / bottom (PE), so only fresh signals are traded."""
+    return signal_age(v, min_score) < FRESH_SIGNAL_BARS
 
 
 def past_square_off_warning_time() -> bool:
@@ -430,6 +492,13 @@ def _available_cash() -> float:
         return 0.0
 
 
+def _account_pnl() -> Optional[float]:
+    try:
+        return zerodha.get_account_pnl()
+    except Exception:
+        return None
+
+
 def _recently_ordered(pos: dict) -> bool:
     last = pos.get("last_order_at")
     if not last:
@@ -445,7 +514,35 @@ def _recently_ordered(pos: dict) -> bool:
 
 # ── Entries ──────────────────────────────────────────────────────────────────
 
-def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY") -> Optional[dict]:
+def _entry_price_check(tradingsymbol: str, exchange: str) -> tuple:
+    """(live price, None) when the contract trades in the lower half of today's range, else (None, reason).
+    Fails closed: no quote / no range -> no entry."""
+    try:
+        q = zerodha.get_quotes([tradingsymbol], exchange=exchange).get(tradingsymbol) or {}
+    except Exception:
+        q = {}
+    ltp, high, low = q.get("last_price") or 0, q.get("high") or 0, q.get("low") or 0
+    if not ltp or not high or not low:
+        return None, f"no live quote/day range for {tradingsymbol}"
+    day_range = high - low
+    if day_range < ltp * MIN_DAY_RANGE_PCT / 100:
+        return ltp, None
+    pos = (ltp - low) / day_range
+    if pos > MAX_ENTRY_RANGE_POS:
+        return None, (f"{tradingsymbol} @ {ltp:g} is at {pos:.0%} of today's range {low:g}–{high:g} "
+                      f"(open {q.get('open') or 0:g}) — not buying near the high, waiting for the middle or lower")
+    return ltp, None
+
+
+def _skip_near_high(nse_symbol: str, reason: str):
+    """The reason carries live prices, so _event's identical-line dedup can't throttle it — do it here."""
+    if time.time() - _high_skip_logged_at.get(nse_symbol, 0) >= _HIGH_SKIP_LOG_SECONDS:
+        _high_skip_logged_at[nse_symbol] = time.time()
+        _event("SKIP", nse_symbol, reason)
+
+
+def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY",
+                 available: Optional[float] = None) -> Optional[dict]:
     """direction BUY (bullish) -> buy ATM CE; SELL (bearish) -> buy ATM PE (OPTIONS mode only)."""
     if direction == "SELL" and cfg["trade_mode"] != "OPTIONS":
         return None  # equity CNC can't be shorted
@@ -469,7 +566,8 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         pass
 
     # Never size or place an order beyond the real funds in the account.
-    available = _available_cash()
+    if available is None:
+        available = _available_cash()
     if available <= 0:
         _event("SKIP", nse_symbol, "no available funds (or margin lookup failed)")
         return None
@@ -481,35 +579,48 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         if not opt or not opt.get("ltp"):
             _event("SKIP", nse_symbol, f"no ATM {want} contract/LTP found (spot {spot:.2f})")
             return None
+        ltp, why = _entry_price_check(opt["tradingsymbol"], "NFO")
+        if why:
+            _skip_near_high(nse_symbol, why)
+            return None
+        opt["ltp"] = ltp
         lot_size = opt["lot_size"]
         lot_cost = opt["ltp"] * lot_size
-        lots = int(budget // lot_cost)
-        if lots < 1:
+        want_lots = int(cfg.get("lots_per_trade") or 0)
+        lots = want_lots if want_lots > 0 else int(budget // lot_cost)
+        if lots < 1 or lots * lot_cost > budget:
+            _unaffordable[nse_symbol] = (time.time(), available)
             mon = datetime.strptime(opt["expiry"], "%Y-%m-%d").strftime("%b").upper()
             _event("SKIP", nse_symbol, f"{nse_symbol} {mon} {opt['strike']:g}{want} "
-                   f"@{opt['ltp']:g}×{lot_size}={lot_cost:.0f} > budget {budget:.0f}")
+                   f"@{opt['ltp']:g}×{lot_size}×{max(lots, 1)} lot(s)={max(lots, 1) * lot_cost:.0f} > budget {budget:.0f}")
             return None
         qty = lots * lot_size
         exchange, tradingsymbol, option_type = "NFO", opt["tradingsymbol"], want
-        product = "MIS"
         entry_price = opt["ltp"]
         instrument_token = opt["instrument_token"]
     else:
         if spot <= 0:
             return None
+        ltp, why = _entry_price_check(nse_symbol, "NSE")
+        if why:
+            _skip_near_high(nse_symbol, why)
+            return None
+        spot = ltp
         qty = int(budget // spot)
         if qty < 1:
+            _unaffordable[nse_symbol] = (time.time(), available)
             _event("SKIP", nse_symbol, f"price {spot:.0f} exceeds the budget {budget:.0f}")
             return None
         exchange, tradingsymbol, option_type = "NSE", nse_symbol, None
-        product = "MIS"
         entry_price = spot
         instrument_token = zerodha.get_instrument_token(nse_symbol, "NSE")
 
     if qty * entry_price > available:
+        _unaffordable[nse_symbol] = (time.time(), available)
         _event("SKIP", nse_symbol, f"{tradingsymbol}: order cost {qty*entry_price:.0f} exceeds available funds {available:.0f}")
         return None
 
+    product = _product_kind(cfg, cfg["trade_mode"])
     order = zerodha.place_and_confirm(
         symbol=tradingsymbol, exchange=exchange, transaction_type="BUY",
         quantity=qty, order_type="MARKET", product=product, tag="auto_trader",
@@ -542,14 +653,14 @@ def _enter_trade(nse_symbol: str, spot: float, cfg: dict, direction: str = "BUY"
         "pnl_pct": 0.0,
         "orders": [{
             "order_id": order["order_id"], "side": "BUY", "qty": qty,
-            "price": round(entry_price, 2), "round": 1, "at": now_iso,
+            "price": round(entry_price, 2), "round": 1, "at": now_iso, "product": product,
         }],
         "created_at": now_iso,
         "closed_at": None,
         "exit_reason": None,
     }
     _create_position(pos)
-    _event("ENTERED", nse_symbol, f"{tradingsymbol} x{qty} @ {entry_price} (cost {qty * entry_price:.0f}, funds were {available:.0f})")
+    _event("ENTERED", nse_symbol, f"{tradingsymbol} x{qty} {product} @ {entry_price} (cost {qty * entry_price:.0f}, funds were {available:.0f})")
     return pos
 
 
@@ -598,9 +709,34 @@ def _check_new_entries(scan_data: dict, cfg: dict):
     ]
     candidates.sort(key=lambda kv: -(kv[1].get("score") or kv[1].get("buy_count") or 0))
 
-    for sym, v in candidates[:slots]:
+    global _no_funds_logged_at
+    available = _available_cash()
+    if available <= 0:
+        if time.time() - _no_funds_logged_at >= UNAFFORDABLE_RETRY_SECONDS:
+            _no_funds_logged_at = time.time()
+            _event("SKIP", "", "no available funds (or margin lookup failed) — no new entries")
+        return
+
+    # Walk the whole ranked list: a pick the funds can't cover is skipped and the next one tried,
+    # until the free slots are filled.
+    entered = 0
+    for sym, v in candidates:
+        if entered >= slots:
+            break
+        if not is_fresh_signal(v, min_score):   # identical SKIP lines are logged once per 10 min
+            _event("SKIP", sym, f"{v['signal']} signal is older than {FRESH_SIGNAL_BARS * 15} min — "
+                   "price has already moved, waiting for a fresh signal")
+            continue
+        skipped = _unaffordable.get(sym)
+        if skipped and time.time() - skipped[0] < UNAFFORDABLE_RETRY_SECONDS and available <= skipped[1]:
+            continue   # too costly a moment ago and funds haven't grown since
         try:
-            _enter_trade(sym, v["spot"], cfg, direction=v["signal"])
+            if _enter_trade(sym, v["spot"], cfg, direction=v["signal"], available=available):
+                entered += 1
+                _unaffordable.pop(sym, None)
+                available = _available_cash()   # the entry used up margin
+                if available <= 0:
+                    break
         except Exception as e:
             _event("ERROR", sym, f"entry error: {e}")
 
@@ -617,6 +753,11 @@ def _lot_size(pos: dict) -> int:
         except Exception:
             pass
     return pos["qty_per_round"]
+
+
+def _averages_done(pos: dict) -> int:
+    """Averaging buys made so far — `rounds` also counts the entry, so 'Max averaging rounds' = N allows N adds."""
+    return max(int(pos.get("rounds") or 1) - 1, 0)
 
 
 def _trend_still_supports(pos: dict) -> bool:
@@ -649,12 +790,15 @@ def _average_down(pos: dict, cur_price: float, cfg: dict, qty: Optional[int] = N
     max_trade_capital = cfg["total_capital"] * cfg["max_margin_pct"] / 100.0
 
     if cost_basis + added_capital > max_trade_capital:
-        _event("SKIP", pos["symbol"], "averaging skipped: would exceed per-trade margin cap")
+        _event("SKIP", pos["symbol"], f"averaging skipped: {cost_basis:.0f} already in + {added_capital:.0f} for "
+               f"{qty} more = {cost_basis + added_capital:.0f} > per-trade cap {max_trade_capital:.0f} "
+               "(capital × max margin %)")
         return "blocked"
 
     available = _available_cash()
     if available < added_capital:
-        _event("SKIP", pos["symbol"], "averaging skipped: insufficient available funds")
+        _event("SKIP", pos["symbol"], f"averaging skipped: {qty} more needs {added_capital:.0f}, "
+               f"available funds {available:.0f}")
         return "blocked"
 
     order = zerodha.place_and_confirm(
@@ -770,8 +914,8 @@ def _check_exits_and_averaging(cfg: dict):
             _persist_price(p, cur, pnl, pnl_pct)
             continue
 
-        # Intraday: flat by the square-off time, whatever the P&L
-        if _hm() >= SQUARE_OFF_TIME:
+        # Flat by the square-off time, whatever the P&L: always for MIS, for NRML/CNC while square_off_eod is on
+        if _hm() >= SQUARE_OFF_TIME and (_product_for(p) == "MIS" or cfg.get("square_off_eod", True)):
             _exit_position(p, cur, reason="intraday_squareoff")
             continue
 
@@ -788,7 +932,7 @@ def _check_exits_and_averaging(cfg: dict):
                 can_average = (
                     cfg.get("stop_loss_action") == "AVERAGE"
                     and not p.get("paused_averaging")
-                    and p["rounds"] < cfg["max_averaging_rounds"]
+                    and _averages_done(p) < cfg["max_averaging_rounds"]
                     and _trend_still_supports(p)
                 )
                 if can_average:
@@ -800,7 +944,7 @@ def _check_exits_and_averaging(cfg: dict):
                 _persist_price(p, cur, pnl, pnl_pct)
             continue
 
-        if p.get("paused_averaging") or p["rounds"] >= cfg["max_averaging_rounds"]:
+        if p.get("paused_averaging") or _averages_done(p) >= cfg["max_averaging_rounds"]:
             _persist_price(p, cur, pnl, pnl_pct)
             continue
 
@@ -933,6 +1077,27 @@ def read_heartbeat() -> Optional[dict]:
 SYNC_GRACE_SECONDS = 90   # don't judge a position that was just traded (Kite may lag)
 
 
+def _manual_exit_price(kite, p: dict) -> Optional[float]:
+    """Average fill price of the SELLs you placed in Kite for this position (not the bot's own
+    orders, not fills from before it was opened). None if they can't be found."""
+    own = {str(o.get("order_id")) for o in p.get("orders") or []}
+    try:
+        opened = datetime.fromisoformat(p.get("created_at") or "")
+        opened = (IST.localize(opened) if opened.tzinfo is None else opened.astimezone(IST)).replace(tzinfo=None)
+        fills = [
+            t for t in (kite.trades() or [])
+            if t.get("tradingsymbol") == p["tradingsymbol"] and t.get("exchange") == p["exchange"]
+            and t.get("transaction_type") == "SELL" and str(t.get("order_id")) not in own
+            and t.get("fill_timestamp") and t["fill_timestamp"].replace(tzinfo=None) >= opened
+        ]
+    except Exception:
+        return None
+    qty = sum(int(t.get("quantity") or 0) for t in fills)
+    if not qty:
+        return None
+    return round(sum(float(t["average_price"]) * int(t["quantity"]) for t in fills) / qty, 2)
+
+
 def reconcile_positions() -> int:
     """
     Mark OPEN positions CLOSED when Kite no longer holds them (you exited in the Kite app),
@@ -983,12 +1148,15 @@ def reconcile_positions() -> int:
                 _event("EXIT", p["symbol"], f"{ts}: you sold part in Kite, qty {p['total_qty']} -> {qty}")
                 changed += 1
                 continue
-            pnl = next((float(r["pnl"]) for r in rows if isinstance(r.get("pnl"), (int, float))), None)
-            if pnl is None:
-                pnl = float(p.get("pnl") or 0)
+            # Not the Kite position row's pnl: that row sums every trade in this contract today.
+            exit_price = _manual_exit_price(kite, p)
+            if exit_price:
+                pnl = (exit_price - p["avg_price"]) * p["total_qty"]
+            else:
+                exit_price, pnl = p.get("current_price"), float(p.get("pnl") or 0)
             deployed = p["avg_price"] * p["total_qty"]
             _update_position(
-                p["id"], status="CLOSED", pnl=round(pnl, 2),
+                p["id"], status="CLOSED", pnl=round(pnl, 2), current_price=exit_price,
                 pnl_pct=round(pnl / deployed * 100, 2) if deployed else 0,
                 closed_at=now_iso, exit_reason="manual_exit", last_order_at=now_iso,
             )

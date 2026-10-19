@@ -42,6 +42,48 @@ export interface NewsItem {
   sentiment?: string;
 }
 
+export interface Candle {
+  time: number; // UTC epoch seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface CandlesResponse {
+  symbol: string;
+  timeframe: string;
+  /** 'kite' = live from Zerodha, 'yahoo' = delayed fallback when logged out or not on NSE. */
+  source: 'kite' | 'yahoo';
+  candles: Candle[];
+}
+
+export type PivotKey = 'R2' | 'R1' | 'PP' | 'S1' | 'S2';
+
+/** The auto-trader's view of one symbol (15m score) plus previous-session pivots for the chart. */
+export interface ChartSignal {
+  symbol: string;
+  timeframe: string;
+  source: 'kite' | 'yahoo';
+  spot: number;
+  direction: Direction;
+  score: number;
+  buy_pts: number;
+  sell_pts: number;
+  rsi: number;
+  macd: string;
+  supertrend: 'BULL' | 'BEAR';
+  vwap: string;
+  vol_spike: boolean;
+  pivots: Record<PivotKey, number>;
+  levels: { T1: number; T2: number; AVG: number; SL1: number; SL2: number | null };
+  /** null when the symbol has no NSE options (commodities, SENSEX). */
+  option: { underlying: string; atm: number; ce_trigger: number; ce_strike: number; pe_trigger: number; pe_strike: number } | null;
+  session: { open: number; high: number; low: number };
+  auto_trader: { scanned: boolean; sector: string | null; min_score: number };
+}
+
 export interface Quote {
   ltp: number;
   pct: number;
@@ -73,6 +115,9 @@ export interface AutoTraderConfig {
   min_entry_score: number;
   stop_loss_pct: number;
   stop_loss_action: 'EXIT' | 'AVERAGE';
+  lots_per_trade: number;
+  product: 'NRML' | 'MIS';
+  square_off_eod: boolean;
 }
 
 export interface AutoPosition {
@@ -103,6 +148,7 @@ export interface AutoSummary {
   available: number;
   available_is_live: boolean;
   pnl_today: number;
+  pnl_is_live?: boolean;
   open_count: number;
   max_active_trades: number;
 }
@@ -116,7 +162,7 @@ export interface AutoTraderState {
   market_open: boolean;
   kite_connected: boolean;
   trades_today: number;
-  rules: { entry_cutoff: string; square_off: string; exit_cooldown_seconds: number };
+  rules: { entry_cutoff: string; square_off: string; exit_cooldown_seconds: number; product: 'NRML' | 'CNC' | 'MIS' };
   warnings: string[];
 }
 
@@ -139,5 +185,6 @@ export interface AutoWatchRow {
   sector: string;
   rsi: number;
   day_pct: number;
+  fresh: boolean;
   eligible: boolean;
 }
