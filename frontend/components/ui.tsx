@@ -1,5 +1,5 @@
 'use client';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 
 type Tone = 'neutral' | 'primary' | 'danger' | 'warn';
 
@@ -24,18 +24,34 @@ export function Btn({
   );
 }
 
-export function Card({ title, right, children, className = '' }: {
+/** `collapsible` makes the header a toggle; `defaultOpen` sets the starting state. */
+export function Card({ title, right, children, className = '', collapsible = false, defaultOpen = true }: {
   title?: ReactNode; right?: ReactNode; children: ReactNode; className?: string;
+  collapsible?: boolean; defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const shown = !collapsible || open;
   return (
     <section className={`rounded-lg border border-line bg-card ${className}`}>
       {(title || right) && (
-        <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
-          <h3 className="text-xs font-bold uppercase tracking-wide text-dim">{title}</h3>
+        <header className={`flex items-center justify-between gap-3 px-3 py-2 ${shown ? 'border-b border-line' : ''}`}>
+          {collapsible ? (
+            <button
+              type="button"
+              onClick={() => setOpen(o => !o)}
+              aria-expanded={open}
+              className="flex flex-1 items-center gap-2 text-left text-xs font-bold uppercase tracking-wide text-dim hover:text-foreground"
+            >
+              <span className={`inline-block text-[10px] transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+              {title}
+            </button>
+          ) : (
+            <h3 className="text-xs font-bold uppercase tracking-wide text-dim">{title}</h3>
+          )}
           {right}
         </header>
       )}
-      <div className="p-3">{children}</div>
+      {shown && <div className="p-3">{children}</div>}
     </section>
   );
 }

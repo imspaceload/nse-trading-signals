@@ -3,6 +3,8 @@ const inr2 = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumF
 
 export const fmtInt = (n: number | null | undefined) => (n == null || Number.isNaN(n) ? '—' : inr0.format(n));
 export const fmtPrice = (n: number | null | undefined) => (n == null || Number.isNaN(n) ? '—' : inr2.format(n));
+/** Price level: whole rupees for index-sized prices, paise for cheap stocks (IDEA ₹14.38). */
+export const fmtLevel = (n: number | null | undefined) => (n != null && Math.abs(n) >= 1000 ? fmtInt(n) : fmtPrice(n));
 export const fmtRupee = (n: number | null | undefined) => (n == null || Number.isNaN(n) ? '—' : `₹${inr2.format(n)}`);
 export const fmtSigned = (n: number | null | undefined) =>
   n == null || Number.isNaN(n) ? '—' : `${n >= 0 ? '+' : '−'}₹${inr2.format(Math.abs(n))}`;

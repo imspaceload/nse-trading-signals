@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { fmtInt } from '../../lib/format';
 import { usePolling } from '../../hooks/usePolling';
 import type { OptionRow } from '../../lib/types';
+import { SymbolPicker } from '../SymbolPicker';
 import { Btn, Empty, ErrorBox, SkeletonRows, Updated } from '../ui';
 
 const atmOf = (spot: number) => (spot <= 0 ? 0 : spot < 5000 ? Math.round(spot / 50) * 50 : Math.round(spot / 100) * 100);
@@ -12,8 +13,8 @@ const k = (n?: number) => (n ? `${(n / 1000).toFixed(0)}K` : '--');
 export function OptionChainTab({ symbol, onSymbol, marketOpen, active }: {
   symbol: string; onSymbol: (s: string) => void; marketOpen: boolean; active: boolean;
 }) {
-  const [draft, setDraft] = useState(symbol);
   const [expiry, setExpiry] = useState<string>('');
+  const fo = usePolling(signal => api.getFoSymbols(signal), { intervalMs: null, enabled: active });
 
   const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
     signal => api.getOptionChain(symbol, signal),
@@ -34,24 +35,18 @@ export function OptionChainTab({ symbol, onSymbol, marketOpen, active }: {
     return all.slice(Math.max(0, mid - 8), mid + 9);
   }, [records, activeExpiry, atm]);
 
-  const submit = () => {
-    const s = draft.trim().toUpperCase();
-    if (s) onSymbol(s);
-  };
-
   return (
     <div className="p-3">
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
-        <input
-          value={draft}
-          onChange={e => setDraft(e.target.value.toUpperCase())}
-          onKeyDown={e => e.key === 'Enter' && submit()}
-          placeholder="NIFTY, BANKNIFTY, RELIANCE…"
-          aria-label="Option chain symbol"
-          className="w-52 rounded-md border border-line bg-card px-2.5 py-1.5 text-sm outline-none focus:border-accent"
+        <SymbolPicker
+          label="Option chain symbol"
+          value={symbol}
+          options={fo.data ?? []}
+          loading={fo.loading}
+          onPick={s => (s === symbol ? void refresh() : onSymbol(s))}
         />
-        <Btn tone="primary" onClick={draft.trim().toUpperCase() === symbol ? refresh : submit} disabled={refreshing}>
-          {refreshing ? 'Loading…' : 'Load chain'}
+        <Btn tone="primary" onClick={refresh} disabled={refreshing}>
+          {refreshing ? 'Loading…' : '⟳ Refresh'}
         </Btn>
         {spot > 0 && (
           <span className="text-xs text-dim">

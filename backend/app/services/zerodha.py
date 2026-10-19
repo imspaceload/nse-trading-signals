@@ -12,10 +12,16 @@ import concurrent.futures
 import requests as _requests
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+import socket
 import pandas as pd
 import pytz
+import urllib3.util.connection as _urllib3_conn
 
 IST = pytz.timezone("Asia/Kolkata")
+
+# Kite only accepts orders from the whitelisted static IP. The droplet has IPv6 too,
+# and requests prefers it, so Kite sees an unregistered v6 address — force IPv4.
+_urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
 
 from app.core import config
 
@@ -195,29 +201,58 @@ def is_configured() -> bool:
     )
 
 
-# Cache connected state for 60s to avoid profile() call on every render
+# Cache connected state to avoid a profile() call on every request
 _connected_cache: bool = False
 _connected_checked_at: float = 0
-_CONNECTED_TTL = 60
+_last_ok_at: float = 0
+_CONNECTED_TTL = 60        # re-validate a working token this often
+_DISCONNECTED_TTL = 10     # while disconnected, look for a login made in another process this often
+_BLIP_RETRY = 5            # Kite unreachable: re-check this soon...
+_BLIP_GRACE = 180          # ...but keep saying "connected" for up to this long since the last good check
+
+
+def _mark_connected(ok: bool):
+    global _connected_cache, _connected_checked_at, _kite_connected, _last_ok_at
+    _connected_cache = _kite_connected = ok
+    _connected_checked_at = time.time()
+    if ok:
+        _last_ok_at = _connected_checked_at
+
+
+def _check_token(kite) -> Optional[bool]:
+    """True = token works, False = Kite rejected it (or there is none), None = couldn't ask (network, rate limit)."""
+    if not kite.access_token:
+        return False
+    try:
+        kite.profile()
+        return True
+    except Exception as e:
+        from kiteconnect.exceptions import TokenException
+        return False if isinstance(e, TokenException) else None
 
 
 def is_connected() -> bool:
-    """True if access token is valid. Cached 60s to avoid per-render network call."""
-    global _connected_cache, _connected_checked_at, _kite_connected
+    """
+    True if the access token is valid. The API runs several worker processes and the trader worker is another
+    one, but the login lands in only one of them — so a missing or rejected token is re-read from storage
+    (restore_saved_token) before answering no. A network blip or rate limit is not a logout: the last good
+    answer stands for up to _BLIP_GRACE, otherwise the dashboard flickers and the trader stops watching exits.
+    """
+    global _connected_checked_at
     now = time.time()
-    if now - _connected_checked_at < _CONNECTED_TTL:
+    if now - _connected_checked_at < (_CONNECTED_TTL if _connected_cache else _DISCONNECTED_TTL):
         return _connected_cache
     kite = get_kite()
     if not kite:
         return False
-    try:
-        kite.profile()
-        _connected_cache = True
-        _kite_connected = True
-    except Exception:
-        _connected_cache = False
-        _kite_connected = False
-    _connected_checked_at = now
+    ok = _check_token(kite)
+    if ok is None and _connected_cache and now - _last_ok_at < _BLIP_GRACE:
+        _connected_checked_at = now - _CONNECTED_TTL + _BLIP_RETRY
+        return True
+    if ok:
+        _mark_connected(True)
+    elif not restore_saved_token():   # restore marks connected itself when it works
+        _mark_connected(False)
     return _connected_cache
 
 
@@ -229,22 +264,14 @@ def restore_saved_token() -> bool:
         kite = get_kite()
         if kite:
             kite.set_access_token(token)
-            # Quick validate
-            try:
-                kite.profile()
-                global _kite_connected, _connected_cache, _connected_checked_at
-                _kite_connected = True
-                _connected_cache = True                  # don't let a stale "disconnected" answer linger
-                _connected_checked_at = time.time()
+            if _check_token(kite):
+                _mark_connected(True)   # don't let a stale "disconnected" answer linger
                 return True
-            except Exception:
-                pass
     return False
 
 
 def disconnect() -> None:
     """Fully log out: invalidate the token at Zerodha, drop it from memory, caches and storage."""
-    global _kite_connected, _connected_cache, _connected_checked_at
     kite = _kite
     if kite is not None:
         try:
@@ -254,9 +281,7 @@ def disconnect() -> None:
             print(f"[zerodha] invalidate_access_token failed (ignored): {e}")
         kite.set_access_token(None)
     os.environ.pop("KITE_ACCESS_TOKEN", None)
-    _kite_connected = False
-    _connected_cache = False
-    _connected_checked_at = time.time()
+    _mark_connected(False)
     _clear_saved_token()
     try:
         os.remove(config.data_path("kite_token.txt"))
@@ -286,10 +311,7 @@ def complete_login(request_token: str) -> Optional[str]:
         kite.set_access_token(access_token)
         today = datetime.now(IST).strftime("%Y-%m-%d")
         _save_token(access_token, today)
-        global _kite_connected, _connected_cache, _connected_checked_at
-        _kite_connected = True
-        _connected_cache = True
-        _connected_checked_at = time.time()
+        _mark_connected(True)
         return access_token
     except Exception as e:
         print(f"[zerodha] complete_login failed: {e}")
@@ -518,10 +540,12 @@ def get_historical_data(
     symbol: str,
     timeframe: str = "5m",
     exchange: str = "NSE",
+    days_back: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV candles from Kite Connect.
     Returns a DataFrame with columns Open/High/Low/Close/Volume indexed by datetime.
+    days_back overrides the per-timeframe default lookback (the chart wants more history than the scanner).
     """
     kite = get_kite()
     if not kite:
@@ -540,7 +564,7 @@ def get_historical_data(
         return pd.DataFrame()
 
     interval  = _TF_TO_KITE.get(timeframe, "5minute")
-    days_back = _TF_DAYS_BACK.get(timeframe, 5)
+    days_back = days_back or _TF_DAYS_BACK.get(timeframe, 5)
     now       = datetime.now(IST)
     from_dt   = now - timedelta(days=days_back)
 
@@ -752,6 +776,23 @@ def get_positions() -> dict:
         return {"day": [], "net": []}
 
 
+def get_account_pnl() -> Optional[float]:
+    """
+    Account-wide P&L as Kite's Positions page shows it ("Total P&L"): the sum of
+    `pnl` over net positions, so it includes trades placed outside the bot.
+    None when the call fails, so callers can fall back instead of showing 0.
+    """
+    kite = get_kite()
+    if not kite:
+        return None
+    try:
+        net = (kite.positions() or {}).get("net", []) or []
+    except Exception as e:
+        print(f"[kite-debug] positions() failed, P&L falls back to bot ledger: {e}", flush=True)
+        return None
+    return sum(float(p.get("pnl") or 0) for p in net)
+
+
 def get_orders() -> list:
     """Get all orders for the day."""
     kite = get_kite()
@@ -896,10 +937,41 @@ def get_fo_underlying_symbols() -> list:
         _get_nfo_instruments("NIFTY")  # loads entire NFO universe into _nfo_cache
     return sorted(_nfo_cache.keys())
 
+_CASH_SETTLED = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"}
+STOCK_OPTION_ROLL_DAYS = 7
+
+
+def _tradable_expiry(symbol: str, expiries):
+    """Nearest expiry we can open fresh longs in (see STOCK_OPTION_ROLL_DAYS)."""
+    today = datetime.now(IST).date()
+    live = sorted(e for e in set(expiries) if e >= today)
+    if symbol.upper() not in _CASH_SETTLED:
+        later = [e for e in live if (e - today).days > STOCK_OPTION_ROLL_DAYS]
+        if later:
+            return later[0]
+    return live[0] if live else None
+
+
+def get_option_strikes(symbol: str) -> List[float]:
+    """Listed strikes of the expiry pick_atm_option trades. Empty if unknown / logged out."""
+    today = datetime.now(IST).date()
+    by_expiry: Dict = {}
+    for r in _get_nfo_instruments(symbol):
+        if (r.get("instrument_type") or "").upper() not in ("CE", "PE"):
+            continue
+        try:
+            exp = datetime.strptime(r["expiry"], "%Y-%m-%d").date()
+            if exp >= today:
+                by_expiry.setdefault(exp, set()).add(float(r["strike"]))
+        except Exception:
+            continue
+    exp = _tradable_expiry(symbol, by_expiry)
+    return sorted(by_expiry[exp]) if exp else []
+
 
 def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
     """
-    Pick the nearest-expiry, nearest-ATM option contract for a stock/index.
+    Pick the nearest tradable expiry (_tradable_expiry), nearest-ATM option contract for a stock/index.
     Used by the auto-trader (auto_trader.py) to enter CE/PE positions off
     scanner signals without needing a strike/expiry picked by hand.
     Returns {"tradingsymbol","strike","type","expiry","lot_size",
@@ -931,8 +1003,8 @@ def pick_atm_option(symbol: str, spot: float, opt_type: str) -> Optional[dict]:
     if not candidates:
         return None
 
-    nearest_expiry = min(c[0] for c in candidates)
-    same_expiry = [c for c in candidates if c[0] == nearest_expiry]
+    target_expiry = _tradable_expiry(symbol, (c[0] for c in candidates))
+    same_expiry = [c for c in candidates if c[0] == target_expiry]
     same_expiry.sort(key=lambda c: abs(c[1] - spot))
     exp, strike, row = same_expiry[0]
 

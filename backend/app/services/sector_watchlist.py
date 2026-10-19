@@ -7,7 +7,7 @@ import concurrent.futures
 import pandas as pd
 
 from app.services import zerodha
-from app.services.indicators import assess_entry_stretch, compute_rsi, compute_macd, compute_supertrend, compute_vwap
+from app.services.indicators import assess_entry_stretch, compute_rsi, compute_macd, compute_supertrend, compute_vwap, day_change_pct
 
 # NSE F&O stocks grouped by sector (trading symbols)
 SECTOR_STOCKS = {
@@ -26,6 +26,45 @@ SECTOR_STOCKS = {
 # Flat deduplicated list of all stocks across every sector (used by Scanner)
 SECTOR_UNIVERSE = tuple(sorted({s for stocks in SECTOR_STOCKS.values() for s in stocks}))
 
+PREV_BARS = 2   # earlier candles also scored, so a signal's age is known
+
+
+def _score_points(df: pd.DataFrame) -> dict:
+    """BUY/SELL points (0-5) from RSI + MACD + Supertrend + VWAP + volume spike on the last candle of `df`."""
+    rsi_d  = compute_rsi(df)
+    macd_d = compute_macd(df)
+    st_d   = compute_supertrend(df)
+    vwap_d = compute_vwap(df)
+
+    buy_pts = sell_pts = 0
+    rsi_sig  = (rsi_d.get("signal")  or "NEUTRAL") if rsi_d  else "NEUTRAL"
+    macd_sig = (macd_d.get("signal") or "NEUTRAL") if macd_d else "NEUTRAL"
+    vwap_sig = (vwap_d.get("signal") or "NEUTRAL") if vwap_d else "NEUTRAL"
+    if rsi_sig  == "BUY":  buy_pts  += 1
+    elif rsi_sig  == "SELL": sell_pts += 1
+    if macd_sig == "BUY":  buy_pts  += 1
+    elif macd_sig == "SELL": sell_pts += 1
+    if st_d:
+        if st_d.get("direction") == 1: buy_pts  += 1
+        else:                           sell_pts += 1
+    if vwap_sig == "BUY":  buy_pts  += 1
+    elif vwap_sig == "SELL": sell_pts += 1
+    try:
+        avg_vol   = float(df["Volume"].iloc[:-1].tail(20).mean())
+        cur_vol   = float(df["Volume"].iloc[-1])
+        vol_spike = avg_vol > 0 and cur_vol > avg_vol * 1.5
+    except Exception:
+        vol_spike = False
+    if vol_spike:
+        if buy_pts > sell_pts:   buy_pts  += 1
+        elif sell_pts > buy_pts: sell_pts += 1
+    return {
+        "buy_pts": buy_pts, "sell_pts": sell_pts,
+        "rsi": round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0,
+        "macd": macd_sig, "vwap": vwap_sig, "vol_spike": vol_spike,
+        "vwap_value": vwap_d.get("value") if vwap_d else None,
+        "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
+    }
 
 
 def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use_kite: bool = False) -> dict:
@@ -60,63 +99,34 @@ def compute_sector_signals(nse_symbols_tuple: tuple, timeframe: str = "15m", use
     def _one(nse_sym):
         try:
             df = ohlcv_map.get(nse_sym)
-            if df is None or df.empty or len(df) < 20:
+            if df is None or df.empty or len(df) < 20 + PREV_BARS:
                 return nse_sym, None
-            spot = float(df["Close"].iloc[-1])
-            rsi_d  = compute_rsi(df)
-            macd_d = compute_macd(df)
-            st_d   = compute_supertrend(df)
-            vwap_d = compute_vwap(df)
-
-            buy_pts = sell_pts = 0
-            rsi_sig  = (rsi_d.get("signal")  or "NEUTRAL") if rsi_d  else "NEUTRAL"
-            macd_sig = (macd_d.get("signal") or "NEUTRAL") if macd_d else "NEUTRAL"
-            vwap_sig = (vwap_d.get("signal") or "NEUTRAL") if vwap_d else "NEUTRAL"
-            if rsi_sig  == "BUY":  buy_pts  += 1
-            elif rsi_sig  == "SELL": sell_pts += 1
-            if macd_sig == "BUY":  buy_pts  += 1
-            elif macd_sig == "SELL": sell_pts += 1
-            if st_d:
-                if st_d.get("direction") == 1: buy_pts  += 1
-                else:                           sell_pts += 1
-            if vwap_sig == "BUY":  buy_pts  += 1
-            elif vwap_sig == "SELL": sell_pts += 1
-            try:
-                avg_vol   = float(df["Volume"].iloc[:-1].tail(20).mean())
-                cur_vol   = float(df["Volume"].iloc[-1])
-                vol_spike = avg_vol > 0 and cur_vol > avg_vol * 1.5
-            except Exception:
-                vol_spike = False
-            if vol_spike:
-                if buy_pts > sell_pts:   buy_pts  += 1
-                elif sell_pts > buy_pts: sell_pts += 1
-
+            cur = _score_points(df)
+            # Same score on the previous candles (newest first) — lets the trader tell a signal that
+            # just fired from one that fired long ago and has already been priced in.
+            prev = [_score_points(df.iloc[:-i]) for i in range(1, PREV_BARS + 1)]
+            buy_pts, sell_pts = cur["buy_pts"], cur["sell_pts"]
             direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
 
             # Anti-chase: a candidate overextended from VWAP, or already sitting at the
             # resistance/support it would need to break, loses a point instead of being
             # traded as-is — that's where a reversal is most likely to start.
-            stretch = assess_entry_stretch(df, vwap_d.get("value") if vwap_d else None, direction)
+            stretch = assess_entry_stretch(df, cur["vwap_value"], direction)
             if stretch["overextended"] or stretch["near_level"]:
                 if direction == "BUY":
                     buy_pts = max(buy_pts - 1, 0)
                 elif direction == "SELL":
                     sell_pts = max(sell_pts - 1, 0)
 
-            max_score = max(buy_pts, sell_pts)
             direction = "BUY" if buy_pts > sell_pts else ("SELL" if sell_pts > buy_pts else "NEUTRAL")
-            try:
-                day_pct = round((df["Close"].iloc[-1] - df["Open"].iloc[0]) / df["Open"].iloc[0] * 100, 2)
-            except Exception:
-                day_pct = 0.0
-            rsi_val = round(float(rsi_d.get("value") or 50), 1) if rsi_d else 50.0
             return nse_sym, {
-                "spot": round(spot, 2),
+                "spot": round(float(df["Close"].iloc[-1]), 2),
                 "buy_pts": buy_pts, "sell_pts": sell_pts,
-                "score": max_score, "direction": direction,
-                "rsi": rsi_val, "macd": macd_sig,
-                "supertrend": "BULL" if (st_d and st_d.get("direction") == 1) else "BEAR",
-                "vwap": vwap_sig, "vol_spike": vol_spike, "day_pct": day_pct,
+                "prev_buy_pts": [p["buy_pts"] for p in prev],
+                "prev_sell_pts": [p["sell_pts"] for p in prev],
+                "score": max(buy_pts, sell_pts), "direction": direction,
+                "rsi": cur["rsi"], "macd": cur["macd"], "supertrend": cur["supertrend"],
+                "vwap": cur["vwap"], "vol_spike": cur["vol_spike"], "day_pct": day_change_pct(df),
                 "chase_reason": stretch["reason"],
             }
         except Exception:
@@ -142,7 +152,8 @@ def build_watchlist(timeframe: str = "15m", use_kite: bool = False, per_sector: 
     """
     Top `per_sector` stocks of every sector (11 sectors x 4 = ~44), keeping only
     clear BULLISH (BUY) or BEARISH (SELL) picks.
-    Returns {nse_symbol: {"signal","spot","score","sector","rsi","day_pct"}}.
+    Returns {nse_symbol: {"signal","spot","score","prev_scores","sector","rsi","day_pct"}};
+    prev_scores = the signal side's points on the previous candles, newest first.
     Pass `signals` to reuse an already-computed compute_sector_signals() result.
     """
     data = signals if signals is not None else compute_sector_signals(SECTOR_UNIVERSE, timeframe, use_kite=use_kite)
@@ -157,6 +168,7 @@ def build_watchlist(timeframe: str = "15m", use_kite: bool = False, per_sector: 
             if v["direction"] in ("BUY", "SELL") and sym not in picks:
                 picks[sym] = {
                     "signal": v["direction"], "spot": v["spot"], "score": v["score"],
+                    "prev_scores": v["prev_buy_pts"] if v["direction"] == "BUY" else v["prev_sell_pts"],
                     "sector": sector, "rsi": v["rsi"], "day_pct": v["day_pct"],
                     "chase_reason": v.get("chase_reason") or "",
                 }
